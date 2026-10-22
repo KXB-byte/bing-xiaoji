@@ -1,0 +1,299 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#fbf7ef" />
+    <meta name="description" content="简单、离线、以日历为中心的个人记事应用" />
+    <link rel="manifest" href="manifest.webmanifest" />
+    <link rel="icon" href="icons/icon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="styles.css" />
+    <title>冰小记</title>
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">我的日常</p>
+          <h1>冰小记</h1>
+        </div>
+        <div class="topbar-actions">
+          <button id="install-button" class="button ghost hidden" type="button">安装</button>
+          <button id="open-data" class="button ghost" type="button">管理</button>
+          <button id="open-trash" class="icon-button" type="button" aria-label="打开回收站" title="回收站">
+            <span aria-hidden="true">♲</span>
+          </button>
+        </div>
+      </header>
+
+      <section class="toolbar" aria-label="日历工具栏">
+        <div class="date-navigation">
+          <button id="previous-period" class="icon-button" type="button" aria-label="上一时段">‹</button>
+          <button id="today-button" class="button ghost" type="button">今天</button>
+          <button id="next-period" class="icon-button" type="button" aria-label="下一时段">›</button>
+        </div>
+        <button id="period-title" class="period-title" type="button" aria-label="选择日期"></button>
+        <input id="date-picker" class="visually-hidden" type="date" />
+        <div class="view-switcher" role="group" aria-label="切换日历视图">
+          <button class="view-button active" data-view="day" type="button">日</button>
+          <button class="view-button" data-view="week" type="button">周</button>
+          <button class="view-button" data-view="month" type="button">月</button>
+        </div>
+      </section>
+
+      <section class="search-row">
+        <label class="search-box">
+          <span aria-hidden="true">⌕</span>
+          <input id="search-input" type="search" placeholder="搜索事项、分类或标签" autocomplete="off" />
+        </label>
+        <button id="open-templates" class="button secondary" type="button">常用模板</button>
+      </section>
+
+      <main id="planner" class="planner" tabindex="-1"></main>
+
+      <button id="add-item" class="floating-button" type="button" aria-label="新建事项">
+        <span aria-hidden="true">＋</span>
+      </button>
+    </div>
+
+    <div id="snackbar" class="snackbar hidden" role="status" aria-live="polite">
+      <span id="snackbar-message"></span>
+      <button id="snackbar-action" type="button">撤销</button>
+    </div>
+
+    <dialog id="item-dialog" class="sheet">
+      <form id="item-form" method="dialog">
+        <div class="sheet-header">
+          <div>
+            <p class="eyebrow">事项</p>
+            <h2 id="item-dialog-title">新建事项</h2>
+          </div>
+          <button class="icon-button close-dialog" type="button" aria-label="关闭">×</button>
+        </div>
+
+        <input id="item-id" type="hidden" />
+        <label class="field full">
+          <span>要做什么</span>
+          <input id="item-title" name="title" type="text" maxlength="120" required placeholder="例如：喝水" />
+        </label>
+
+        <div class="field-grid">
+          <label class="field">
+            <span>日期</span>
+            <input id="item-date" name="date" type="date" required />
+          </label>
+          <label class="field">
+            <span>时间（可选）</span>
+            <input id="item-time" name="time" type="time" step="300" />
+          </label>
+        </div>
+
+        <label class="field full">
+          <span>分类</span>
+          <select id="item-category" name="category"></select>
+        </label>
+        <details class="option-creator">
+          <summary>＋ 添加自定义分类</summary>
+          <div class="option-creator-row">
+            <input id="new-category-name" type="text" maxlength="20" placeholder="分类名称" aria-label="新分类名称" />
+            <div id="category-color-presets" class="color-presets" aria-label="分类预设颜色"></div>
+            <label class="color-picker">
+              <span>自定义</span>
+              <input id="new-category-color" type="color" value="#d58b63" aria-label="新分类颜色" />
+            </label>
+            <button id="add-category" class="button secondary" type="button">添加</button>
+          </div>
+        </details>
+
+        <fieldset class="tag-field">
+          <legend>标签（可多选）</legend>
+          <div id="tag-options" class="tag-options"></div>
+          <details class="option-creator">
+            <summary>＋ 添加新标签</summary>
+            <div class="option-creator-row">
+              <input id="new-tag-name" type="text" maxlength="20" placeholder="标签名称" aria-label="新标签名称" />
+              <div id="tag-color-presets" class="color-presets" aria-label="标签预设颜色"></div>
+              <label class="color-picker">
+                <span>自定义</span>
+                <input id="new-tag-color" type="color" value="#e9b872" aria-label="新标签颜色" />
+              </label>
+              <button id="add-tag" class="button secondary" type="button">添加</button>
+            </div>
+          </details>
+        </fieldset>
+
+        <label class="field full">
+          <span>备注</span>
+          <textarea id="item-notes" name="notes" rows="3" maxlength="1000" placeholder="补充一点细节"></textarea>
+        </label>
+
+        <div class="field-grid">
+          <label class="field">
+            <span>循环</span>
+            <select id="item-recurrence" name="recurrence">
+              <option value="none">不循环</option>
+              <option value="daily">每天</option>
+              <option value="weekly">每周</option>
+              <option value="monthly">每月</option>
+            </select>
+          </label>
+          <label class="check-field">
+            <input id="item-pinned" name="pinned" type="checkbox" />
+            <span>置顶</span>
+          </label>
+        </div>
+        <label class="check-field weekly-check">
+          <input id="item-weekly" name="weeklyOnly" type="checkbox" />
+          <span>仅作为本周总体事项，不安排到某一天</span>
+        </label>
+
+        <p id="draft-hint" class="form-hint hidden">已恢复上次未保存的内容</p>
+
+        <div class="sheet-actions">
+          <button id="delete-item" class="button danger hidden" type="button">删除</button>
+          <button id="save-template-from-item" class="button ghost" type="button">存为模板</button>
+          <button class="button primary" type="submit">保存</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="action-dialog" class="sheet compact-sheet">
+      <div class="sheet-header">
+        <div>
+          <p class="eyebrow">事项操作</p>
+          <h2 id="action-item-title"></h2>
+        </div>
+        <button class="icon-button close-dialog" type="button" aria-label="关闭">×</button>
+      </div>
+      <div class="action-list">
+        <button id="edit-action" class="action-row" type="button">编辑本次事项</button>
+        <button id="copy-action" class="action-row" type="button">复制到其他日期</button>
+        <button id="template-action" class="action-row" type="button">保存为常用模板</button>
+        <button id="delete-action" class="action-row danger-text" type="button">删除</button>
+      </div>
+    </dialog>
+
+    <dialog id="copy-dialog" class="sheet compact-sheet">
+      <form id="copy-form" method="dialog">
+        <div class="sheet-header">
+          <div>
+            <p class="eyebrow">复制事项</p>
+            <h2>选择目标日期</h2>
+          </div>
+          <button class="icon-button close-dialog" type="button" aria-label="关闭">×</button>
+        </div>
+        <label class="field full">
+          <span>复制到</span>
+          <input id="copy-date" type="date" required />
+        </label>
+        <div class="sheet-actions">
+          <button class="button primary" type="submit">确认复制</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="recurrence-delete-dialog" class="sheet compact-sheet">
+      <div class="sheet-header">
+        <div>
+          <p class="eyebrow">删除循环事项</p>
+          <h2>请选择删除范围</h2>
+        </div>
+        <button class="icon-button close-dialog" type="button" aria-label="关闭">×</button>
+      </div>
+      <p class="dialog-copy">删除的事项会进入回收站，30 天内都可以恢复。</p>
+      <div class="action-list">
+        <button class="action-row delete-scope" data-scope="single" type="button">仅删除本次</button>
+        <button class="action-row delete-scope" data-scope="future" type="button">删除本次及以后</button>
+        <button class="action-row delete-scope danger-text" data-scope="series" type="button">删除整个循环</button>
+      </div>
+    </dialog>
+
+    <dialog id="templates-dialog" class="sheet">
+      <div class="sheet-header">
+        <div>
+          <p class="eyebrow">快速添加</p>
+          <h2>常用模板</h2>
+        </div>
+        <button class="icon-button close-dialog" type="button" aria-label="关闭">×</button>
+      </div>
+      <div id="templates-list" class="template-list"></div>
+    </dialog>
+
+    <dialog id="template-date-dialog" class="sheet compact-sheet">
+      <form id="template-date-form" method="dialog">
+        <div class="sheet-header">
+          <div>
+            <p class="eyebrow">使用模板</p>
+            <h2 id="template-date-title">选择日期</h2>
+          </div>
+          <button class="icon-button close-dialog" type="button" aria-label="关闭">×</button>
+        </div>
+        <label class="field full">
+          <span>添加到</span>
+          <input id="template-target-date" type="date" required />
+        </label>
+        <div class="sheet-actions">
+          <button class="button primary" type="submit">添加事项</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="trash-dialog" class="sheet">
+      <div class="sheet-header">
+        <div>
+          <p class="eyebrow">误删保护</p>
+          <h2>回收站</h2>
+        </div>
+        <button class="icon-button close-dialog" type="button" aria-label="关闭">×</button>
+      </div>
+      <p class="dialog-copy">删除的事项会保留 30 天，之后自动清理。</p>
+      <div id="trash-list" class="template-list"></div>
+    </dialog>
+
+    <dialog id="data-dialog" class="sheet">
+      <div class="sheet-header">
+        <div>
+          <p class="eyebrow">本地数据</p>
+          <h2>管理与备份</h2>
+        </div>
+        <button class="icon-button close-dialog" type="button" aria-label="关闭">×</button>
+      </div>
+
+      <section class="management-section">
+        <div class="management-heading">
+          <div>
+            <h3>分类</h3>
+            <p>删除分类后，相关事项会变为未分类。</p>
+          </div>
+        </div>
+        <div id="category-management-list" class="management-list"></div>
+      </section>
+
+      <section class="management-section">
+        <div class="management-heading">
+          <div>
+            <h3>标签</h3>
+            <p>删除标签不会删除使用它的事项。</p>
+          </div>
+        </div>
+        <div id="tag-management-list" class="management-list"></div>
+      </section>
+
+      <section class="management-section backup-section">
+        <div class="management-heading">
+          <div>
+            <h3>换设备备份</h3>
+            <p>导出为 JSON 文件；在新设备导入时会与现有数据合并并跳过重复项。</p>
+          </div>
+        </div>
+        <div class="backup-actions">
+          <button id="export-data" class="button primary" type="button">导出全部数据</button>
+          <button id="choose-import" class="button secondary" type="button">导入备份</button>
+          <input id="import-file" class="visually-hidden" type="file" accept="application/json,.json" />
+        </div>
+      </section>
+    </dialog>
+
+    <script src="app.js" defer></script>
+  </body>
+</html>
