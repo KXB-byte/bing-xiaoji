@@ -338,6 +338,7 @@ function setView(view) {
   const allowedViews = ["day", "week", "month"];
   state.view = allowedViews.includes(view) ? view : "day";
   localStorage.setItem(VIEW_KEY, state.view);
+  document.body.dataset.view = state.view;
   document.querySelectorAll(".view-button").forEach((button) => {
     button.classList.toggle("active", button.dataset.view === state.view);
   });

@@ -1084,61 +1084,172 @@ select {
 
 @media (max-width: 760px) {
   .app-shell {
-    padding-right: 14px;
-    padding-left: 14px;
+    padding: max(10px, env(safe-area-inset-top)) 10px max(78px, calc(66px + env(safe-area-inset-bottom)));
+  }
+
+  .topbar h1 {
+    font-size: 1.75rem;
+  }
+
+  .eyebrow {
+    margin-bottom: 1px;
+    font-size: 0.66rem;
+  }
+
+  .topbar-actions {
+    gap: 6px;
+  }
+
+  .topbar-actions .button,
+  .topbar-actions .icon-button {
+    min-height: 36px;
+    border-radius: 12px;
+  }
+
+  .topbar-actions .button {
+    padding: 0 12px;
+  }
+
+  .topbar-actions .icon-button {
+    width: 36px;
+    font-size: 1.2rem;
   }
 
   .toolbar {
     display: grid;
     grid-template-columns: auto 1fr;
+    gap: 7px;
+    margin: 10px 0 8px;
+    padding: 7px;
+    border-radius: 16px;
   }
 
   .period-title {
     order: -1;
     grid-column: 1 / -1;
+    padding: 2px;
+    font-size: 0.94rem;
   }
 
   .view-switcher {
+    grid-template-columns: repeat(3, 36px);
     justify-self: end;
   }
 
+  .view-button {
+    min-height: 32px;
+  }
+
+  .date-navigation {
+    gap: 4px;
+  }
+
+  .date-navigation .button {
+    min-height: 34px;
+    padding: 0 10px;
+  }
+
   .date-navigation .icon-button {
-    width: 38px;
+    width: 34px;
+    min-height: 34px;
+    font-size: 1.25rem;
+  }
+
+  .search-row {
+    gap: 8px;
+    margin-bottom: 10px;
+  }
+
+  .search-box {
+    min-height: 40px;
+    padding: 0 12px;
+    border-radius: 13px;
+  }
+
+  .search-box span {
+    font-size: 1.1rem;
+  }
+
+  .search-row .button {
+    min-height: 40px;
+    padding: 0 10px;
+    border-radius: 13px;
+    font-size: 0.88rem;
+  }
+
+  body[data-view="week"] .app-shell,
+  body[data-view="month"] .app-shell {
+    padding-bottom: max(10px, env(safe-area-inset-bottom));
+  }
+
+  body[data-view="week"] .week-card {
+    min-height: 120px;
+    padding: 8px;
+  }
+
+  body[data-view="week"] .week-day-button,
+  body[data-view="week"] .week-overview-heading {
+    min-height: 32px;
+    margin-bottom: 4px;
+    padding-bottom: 4px;
+  }
+
+  body[data-view="week"] .week-overview-heading {
+    gap: 5px;
+  }
+
+  body[data-view="week"] .week-item {
+    min-height: 28px;
+    gap: 5px;
+  }
+
+  body[data-view="week"] .week-item-title {
+    padding: 5px 0;
+    font-size: 0.76rem;
+  }
+
+  body[data-view="week"] .week-complete {
+    width: 20px;
+    height: 20px;
+  }
+
+  body[data-view="week"] .week-empty {
+    padding: 8px 2px;
+  }
+
+  .month-weekdays {
+    padding-bottom: 4px;
   }
 
   .month-cell {
-    min-height: 108px;
-    padding: 5px 4px;
+    min-height: clamp(68px, calc((100dvh - 244px) / 6), 96px);
+    padding: 3px;
   }
 
   .month-items {
-    gap: 2px;
-    margin-top: 4px;
+    gap: 1px;
+    margin-top: 2px;
   }
 
   .month-item {
     min-width: 0;
-    padding: 2px 3px;
-    border-radius: 5px;
-    font-size: 0.58rem;
-    line-height: 1.15;
+    padding: 1px 2px;
+    border-radius: 4px;
+    font-size: 0.55rem;
+    line-height: 1;
   }
 
   .month-number {
-    font-size: 0.76rem;
+    font-size: 0.72rem;
   }
 
   .month-cell.today .month-number {
-    width: 22px;
-    height: 22px;
+    width: 20px;
+    height: 20px;
   }
 
   .search-row {
     align-items: stretch;
-  }
-
-  .search-row .button {
-    padding: 0 12px;
   }
 }
 
@@ -1180,8 +1291,6 @@ select {
   }
 
   .week-card {
-    min-height: 245px;
-    padding: 9px;
     border-radius: 14px;
   }
 
@@ -1194,7 +1303,7 @@ select {
   }
 
   .week-item-title {
-    font-size: 0.8rem;
+    font-size: 0.76rem;
   }
 
   .management-list {
