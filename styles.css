@@ -1,5 +1,6 @@
 :root {
   color-scheme: light;
+  view-transition-name: none;
   --bg: #fbf7ef;
   --surface: #fffaf2;
   --surface-strong: #fffdf8;
@@ -228,6 +229,7 @@ select {
 .planner {
   outline: none;
   touch-action: pan-y;
+  view-transition-name: planner-content;
 }
 
 .day-layout {
@@ -797,57 +799,48 @@ select {
 .color-presets {
   display: grid;
   grid-column: 1 / -1;
-  grid-template-columns: repeat(8, minmax(0, 1fr));
-  gap: 8px;
+  width: min(100%, 250px);
+  grid-template-columns: repeat(6, 34px);
+  justify-content: center;
+  gap: 6px;
+  margin: 4px auto 10px;
 }
 
 .color-preset {
+  position: relative;
   display: grid;
-  width: 100%;
-  max-width: 34px;
-  aspect-ratio: 1;
-  padding: 4px;
-  border: 2px solid transparent;
-  border-radius: 50%;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border: 0;
   background: transparent;
   cursor: pointer;
   place-items: center;
 }
 
 .color-preset > span {
-  width: 26px;
-  height: 26px;
-  border: 2px solid rgba(255, 255, 255, 0.9);
-  border-radius: 50%;
-  box-shadow: 0 1px 4px rgba(64, 55, 47, 0.18);
+  width: 32px;
+  height: 32px;
+  border-radius: 5px;
+  box-shadow: 0 1px 3px rgba(64, 55, 47, 0.2);
+  transition: transform 140ms ease;
 }
 
-.color-preset.selected {
-  border-color: var(--primary);
-  background: transparent;
+.color-preset.selected > span {
+  transform: scale(0.78);
 }
 
-.color-picker {
-  display: flex;
-  min-height: 42px;
-  align-items: center;
-  gap: 7px;
-  padding: 5px 8px 5px 10px;
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  color: var(--muted);
-  background: #fdf8f1;
+.color-preset.selected::after {
+  position: absolute;
+  content: "✓";
+  color: white;
   font-size: 0.78rem;
+  font-weight: 800;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.65);
 }
 
-.color-picker input {
-  width: 30px;
-  height: 30px;
-  padding: 2px;
-  border: 0;
-  border-radius: 8px;
-  background: transparent;
-  cursor: pointer;
+.color-presets-dialog {
+  margin-top: 16px;
 }
 
 .tag-field {
@@ -1112,23 +1105,23 @@ select {
   background: #fdf8f1;
 }
 
-.managed-color-input {
+.managed-color-button {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  place-items: center;
+}
+
+.managed-color-button > span {
   width: 30px;
   height: 30px;
-  padding: 2px;
-  border: 1px solid var(--line);
-  border-radius: 9px;
-  background: var(--surface-strong);
-  cursor: pointer;
-}
-
-.managed-color-input::-webkit-color-swatch-wrapper {
-  padding: 0;
-}
-
-.managed-color-input::-webkit-color-swatch {
-  border: 0;
-  border-radius: 6px;
+  border-radius: 5px;
+  background: var(--managed-color);
+  box-shadow: 0 1px 3px rgba(64, 55, 47, 0.2);
 }
 
 .managed-option strong {
@@ -1211,6 +1204,9 @@ select {
 
 @media (max-width: 760px) {
   .app-shell {
+    display: flex;
+    min-height: 100dvh;
+    flex-direction: column;
     padding: max(6px, env(safe-area-inset-top)) 10px max(78px, calc(66px + env(safe-area-inset-bottom)));
   }
 
@@ -1318,16 +1314,11 @@ select {
     padding-bottom: max(10px, env(safe-area-inset-bottom));
   }
 
-  body[data-view="week"] .app-shell {
-    display: flex;
-    min-height: 100dvh;
-    flex-direction: column;
-  }
-
-  body[data-view="week"] .planner {
+  .planner {
     display: flex;
     min-height: 0;
     flex: 1;
+    flex-direction: column;
   }
 
   body[data-view="week"] .week-board {
@@ -1497,6 +1488,50 @@ select {
       transform 140ms ease,
       box-shadow 140ms ease,
       background 140ms ease;
+  }
+
+  @keyframes period-slide-out-next {
+    to {
+      opacity: 0;
+      transform: translateX(-28%);
+    }
+  }
+
+  @keyframes period-slide-in-next {
+    from {
+      opacity: 0;
+      transform: translateX(28%);
+    }
+  }
+
+  @keyframes period-slide-out-previous {
+    to {
+      opacity: 0;
+      transform: translateX(28%);
+    }
+  }
+
+  @keyframes period-slide-in-previous {
+    from {
+      opacity: 0;
+      transform: translateX(-28%);
+    }
+  }
+
+  html[data-period-direction="next"]::view-transition-old(planner-content) {
+    animation: 240ms cubic-bezier(0.4, 0, 0.2, 1) both period-slide-out-next;
+  }
+
+  html[data-period-direction="next"]::view-transition-new(planner-content) {
+    animation: 240ms cubic-bezier(0.4, 0, 0.2, 1) both period-slide-in-next;
+  }
+
+  html[data-period-direction="previous"]::view-transition-old(planner-content) {
+    animation: 240ms cubic-bezier(0.4, 0, 0.2, 1) both period-slide-out-previous;
+  }
+
+  html[data-period-direction="previous"]::view-transition-new(planner-content) {
+    animation: 240ms cubic-bezier(0.4, 0, 0.2, 1) both period-slide-in-previous;
   }
 
   .item-card:active,

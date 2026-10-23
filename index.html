@@ -269,10 +269,7 @@
           <div class="option-creator-row">
             <input id="new-category-name" type="text" maxlength="20" placeholder="分类名称" aria-label="新分类名称" />
             <div id="category-color-presets" class="color-presets" aria-label="分类预设颜色"></div>
-            <label class="color-picker">
-              <span>自定义</span>
-              <input id="new-category-color" type="color" value="#d58b63" aria-label="新分类颜色" />
-            </label>
+            <input id="new-category-color" type="hidden" value="#d58b63" />
             <button id="add-category" class="button secondary" type="button">添加</button>
           </div>
         </details>
@@ -291,10 +288,7 @@
           <div class="option-creator-row">
             <input id="new-tag-name" type="text" maxlength="20" placeholder="标签名称" aria-label="新标签名称" />
             <div id="tag-color-presets" class="color-presets" aria-label="标签预设颜色"></div>
-            <label class="color-picker">
-              <span>自定义</span>
-              <input id="new-tag-color" type="color" value="#e9b872" aria-label="新标签颜色" />
-            </label>
+            <input id="new-tag-color" type="hidden" value="#e9b872" />
             <button id="add-tag" class="button secondary" type="button">添加</button>
           </div>
         </details>
@@ -325,6 +319,18 @@
           <input id="import-file" class="visually-hidden" type="file" accept="application/json,.json" />
         </div>
       </section>
+    </dialog>
+
+    <dialog id="option-color-dialog" class="sheet compact-sheet">
+      <div class="sheet-header">
+        <div>
+          <p class="eyebrow">颜色</p>
+          <h2 id="option-color-dialog-title">修改颜色</h2>
+        </div>
+        <button class="icon-button close-dialog" type="button" aria-label="关闭">×</button>
+      </div>
+      <p class="dialog-copy">直接点选一种颜色，选择后会立即保存。</p>
+      <div id="option-color-palette" class="color-presets color-presets-dialog" aria-label="颜色色板"></div>
     </dialog>
 
     <dialog id="sync-dialog" class="sheet">

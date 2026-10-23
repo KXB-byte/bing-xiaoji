@@ -70,14 +70,42 @@ const CHINESE_CALENDAR_FORMATTER = new Intl.DateTimeFormat("zh-CN-u-ca-chinese",
 });
 const HAS_CHINESE_CALENDAR = CHINESE_CALENDAR_FORMATTER.resolvedOptions().calendar === "chinese";
 const COLOR_PRESETS = [
+  "#d58b63",
+  "#c97c5d",
+  "#b56576",
+  "#9b5d73",
+  "#7d4e68",
+  "#5a3d52",
+  "#f4a7b9",
+  "#e6b8af",
+  "#e9b872",
   "#f5bd4f",
-  "#f28c52",
-  "#ef6f6c",
-  "#ed82a4",
-  "#a985d6",
-  "#62a9df",
+  "#ddb892",
+  "#a98467",
+  "#d4e3b5",
+  "#b7c9a8",
+  "#8fc86f",
+  "#6f9e7c",
+  "#4f7c68",
+  "#365d4a",
+  "#a8dadc",
   "#57c2d1",
-  "#8fc86f"
+  "#62a9df",
+  "#9bc7ee",
+  "#5b8db8",
+  "#355070",
+  "#d8c4e8",
+  "#b8a7d9",
+  "#a985d6",
+  "#8f7aae",
+  "#735d78",
+  "#4f4359",
+  "#f2e8dc",
+  "#d8c3a5",
+  "#b7a99a",
+  "#94a3b8",
+  "#64748b",
+  "#40372f"
 ];
 const DEFAULT_CATEGORIES = [
   { name: "生活", color: "#f5bd4f" },
@@ -101,6 +129,9 @@ const state = {
   optionDeletePending: false,
   plannerSwipeStart: null,
   ignorePlannerClickUntil: 0,
+  periodTransitioning: false,
+  optionColorEditType: null,
+  optionColorEditName: null,
   completionTimers: new Map(),
   undoIds: [],
   undoTimer: null,
@@ -200,6 +231,9 @@ function mapElements() {
     "data-dialog",
     "category-management-list",
     "tag-management-list",
+    "option-color-dialog",
+    "option-color-dialog-title",
+    "option-color-palette",
     "export-data",
     "backup-status",
     "sync-status",
@@ -276,8 +310,7 @@ function bindEvents() {
   elements.itemDeadlineTime.addEventListener("change", () => handleTimeChange(elements.itemDeadlineTime));
   elements.categoryColorPresets.addEventListener("click", selectPresetColor);
   elements.tagColorPresets.addEventListener("click", selectPresetColor);
-  elements.newCategoryColor.addEventListener("input", syncPresetSelection);
-  elements.newTagColor.addEventListener("input", syncPresetSelection);
+  elements.optionColorPalette.addEventListener("click", selectManagedOptionColor);
   elements.itemWeekly.addEventListener("change", updateWeeklyFormState);
   elements.addCategory.addEventListener("click", addCategory);
   elements.addTag.addEventListener("click", addTag);
@@ -315,8 +348,8 @@ function bindEvents() {
   elements.toggleNotifications.addEventListener("click", togglePushNotifications);
   elements.categoryManagementList.addEventListener("click", handleOptionDelete);
   elements.tagManagementList.addEventListener("click", handleOptionDelete);
-  elements.categoryManagementList.addEventListener("change", handleOptionColorChange);
-  elements.tagManagementList.addEventListener("change", handleOptionColorChange);
+  elements.categoryManagementList.addEventListener("click", openManagedOptionColorDialog);
+  elements.tagManagementList.addEventListener("click", openManagedOptionColorDialog);
   elements.exportData.addEventListener("click", exportAllData);
   elements.chooseImport.addEventListener("click", () => elements.importFile.click());
   elements.importFile.addEventListener("change", importBackup);
@@ -494,6 +527,49 @@ function setView(view) {
 }
 
 function movePeriod(direction) {
+  if (state.periodTransitioning) return;
+
+  const updatePeriod = () => {
+    applyPeriodMove(direction);
+    render();
+  };
+  const prefersReducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  if (prefersReducedMotion) {
+    updatePeriod();
+    return;
+  }
+
+  state.periodTransitioning = true;
+  document.documentElement.dataset.periodDirection = direction > 0 ? "next" : "previous";
+  const finishTransition = () => {
+    state.periodTransitioning = false;
+    delete document.documentElement.dataset.periodDirection;
+  };
+
+  if (typeof document.startViewTransition === "function") {
+    const transition = document.startViewTransition(updatePeriod);
+    transition.finished.then(finishTransition, (error) => {
+      console.error("日历切换动画失败", error);
+      finishTransition();
+    });
+    return;
+  }
+
+  updatePeriod();
+  const animation = elements.planner.animate(
+    [
+      { opacity: 0.35, transform: `translateX(${direction > 0 ? 18 : -18}px)` },
+      { opacity: 1, transform: "translateX(0)" }
+    ],
+    { duration: 220, easing: "cubic-bezier(0.22, 1, 0.36, 1)" }
+  );
+  animation.finished.then(finishTransition, (error) => {
+    if (error.name !== "AbortError") console.error("日历切换动画失败", error);
+    finishTransition();
+  });
+}
+
+function applyPeriodMove(direction) {
   const date = new Date(state.selectedDate);
   if (state.view === "day") date.setDate(date.getDate() + direction);
   if (state.view === "week") date.setDate(date.getDate() + direction * 7);
@@ -505,7 +581,6 @@ function movePeriod(direction) {
     date.setDate(Math.min(day, lastDay));
   }
   state.selectedDate = startOfDay(date);
-  render();
 }
 
 function handlePlannerPointerDown(event) {
@@ -920,20 +995,24 @@ function updateCompletionInView(item) {
 }
 
 function renderColorPresets() {
-  const markup = COLOR_PRESETS.map(
+  renderColorPalette(elements.categoryColorPresets, elements.newCategoryColor.value);
+  renderColorPalette(elements.tagColorPresets, elements.newTagColor.value);
+  syncPresetSelection();
+}
+
+function renderColorPalette(container, selectedColor = "") {
+  container.innerHTML = COLOR_PRESETS.map(
     (color, index) => `
       <button
-        class="color-preset"
+        class="color-preset ${color.toLowerCase() === selectedColor.toLowerCase() ? "selected" : ""}"
         type="button"
         data-preset-color="${color}"
-        aria-label="选择预设颜色 ${index + 1}"
+        aria-label="选择颜色 ${index + 1}"
+        title="${color}"
       >
         <span style="background:${color}"></span>
       </button>`
   ).join("");
-  elements.categoryColorPresets.innerHTML = markup;
-  elements.tagColorPresets.innerHTML = markup;
-  syncPresetSelection();
 }
 
 function selectPresetColor(event) {
@@ -943,7 +1022,6 @@ function selectPresetColor(event) {
     event.currentTarget === elements.categoryColorPresets ? elements.newCategoryColor : elements.newTagColor;
   colorInput.value = button.dataset.presetColor;
   syncPresetSelection();
-  saveDraft();
 }
 
 function syncPresetSelection() {
@@ -2134,14 +2212,14 @@ function renderManagedOption(type, option) {
   const encodedName = encodeURIComponent(option.name);
   return `
     <div class="managed-option">
-      <input
-        class="managed-color-input"
-        type="color"
-        value="${option.color}"
-        data-update-option-color="${type}"
+      <button
+        class="managed-color-button"
+        type="button"
+        style="--managed-color:${option.color}"
+        data-edit-option-color="${type}"
         data-option-name="${encodedName}"
         aria-label="修改${escapeHtml(option.name)}的颜色"
-      />
+      ><span></span></button>
       <strong>${escapeHtml(option.name)}</strong>
       <button
         class="mini-button danger"
@@ -2153,11 +2231,11 @@ function renderManagedOption(type, option) {
     </div>`;
 }
 
-function handleOptionColorChange(event) {
-  const input = event.target.closest("[data-update-option-color]");
-  if (!input) return;
-  const type = input.dataset.updateOptionColor;
-  const name = decodeURIComponent(input.dataset.optionName);
+function openManagedOptionColorDialog(event) {
+  const button = event.target.closest("[data-edit-option-color]");
+  if (!button) return;
+  const type = button.dataset.editOptionColor;
+  const name = decodeURIComponent(button.dataset.optionName);
   const options = type === "category" ? state.categories : state.tags;
   const option = options.find((candidate) => candidate.name === name);
   if (!option) {
@@ -2166,14 +2244,37 @@ function handleOptionColorChange(event) {
     return;
   }
 
-  const color = sanitizeColor(input.value);
-  if (option.color === color) return;
+  state.optionColorEditType = type;
+  state.optionColorEditName = name;
+  elements.optionColorDialogTitle.textContent = `修改“${name}”的颜色`;
+  renderColorPalette(elements.optionColorPalette, option.color);
+  elements.optionColorDialog.showModal();
+}
+
+function selectManagedOptionColor(event) {
+  const button = event.target.closest("[data-preset-color]");
+  if (!button || !state.optionColorEditType || !state.optionColorEditName) return;
+  const type = state.optionColorEditType;
+  const options = type === "category" ? state.categories : state.tags;
+  const option = options.find((candidate) => candidate.name === state.optionColorEditName);
+  if (!option) {
+    elements.optionColorDialog.close();
+    showSnackbar("没有找到要修改的分类或标签", false);
+    return;
+  }
+
+  const color = sanitizeColor(button.dataset.presetColor);
+  if (option.color === color) {
+    elements.optionColorDialog.close();
+    return;
+  }
   option.color = color;
   saveOptionLibrary();
   renderCategoryOptions();
   renderTagOptions();
   renderPlanner();
   renderOptionManagement();
+  elements.optionColorDialog.close();
   showSnackbar(`${type === "category" ? "分类" : "标签"}颜色已更新`, false);
 }
 
