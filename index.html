@@ -13,10 +13,7 @@
   <body>
     <div class="app-shell">
       <header class="topbar">
-        <div>
-          <p class="eyebrow">我的日常</p>
-          <h1>冰小记</h1>
-        </div>
+        <h1>冰小记</h1>
         <div class="topbar-actions">
           <button id="install-button" class="button ghost hidden" type="button">安装</button>
           <button id="open-data" class="button ghost" type="button">管理</button>
@@ -77,14 +74,18 @@
           <input id="item-title" name="title" type="text" maxlength="120" required placeholder="例如：喝水" />
         </label>
 
-        <div class="field-grid">
-          <label class="field">
+        <div class="field-grid date-time-grid">
+          <label class="field date-field">
             <span>日期</span>
             <input id="item-date" name="date" type="date" required />
           </label>
           <label class="field">
-            <span>时间（可选）</span>
-            <input id="item-time" name="time" type="time" step="300" />
+            <span>开始时间（可选）</span>
+            <select id="item-time" name="time" aria-label="开始时间"></select>
+          </label>
+          <label class="field">
+            <span>截止时间（可选）</span>
+            <select id="item-deadline-time" name="deadlineTime" aria-label="截止时间"></select>
           </label>
         </div>
 
@@ -145,6 +146,10 @@
         <label class="check-field weekly-check">
           <input id="item-weekly" name="weeklyOnly" type="checkbox" />
           <span>仅作为本周总体事项，不安排到某一天</span>
+        </label>
+        <label class="check-field reminder-check">
+          <input id="item-reminder" name="reminderEnabled" type="checkbox" checked />
+          <span>开始前 5 分钟通知提醒</span>
         </label>
 
         <p id="draft-hint" class="form-hint hidden">已恢复上次未保存的内容</p>
@@ -250,6 +255,23 @@
       <div id="trash-list" class="template-list"></div>
     </dialog>
 
+    <dialog id="backup-reminder-dialog" class="sheet compact-sheet">
+      <div class="sheet-header">
+        <div>
+          <p class="eyebrow">数据安全</p>
+          <h2>该备份了</h2>
+        </div>
+        <button class="icon-button close-dialog" type="button" aria-label="关闭">×</button>
+      </div>
+      <p class="dialog-copy">
+        距离上次备份已经一周。导出的 JSON 文件通常会保存在手机或电脑的“下载/Download”文件夹，也可以再移动到自己的网盘。
+      </p>
+      <div class="sheet-actions">
+        <button id="backup-reminder-later" class="button secondary" type="button">稍后</button>
+        <button id="backup-reminder-export" class="button primary" type="button">立即导出</button>
+      </div>
+    </dialog>
+
     <dialog id="data-dialog" class="sheet">
       <div class="sheet-header">
         <div>
@@ -279,11 +301,22 @@
         <div id="tag-management-list" class="management-list"></div>
       </section>
 
+      <section class="management-section sync-section">
+        <div class="management-heading">
+          <div>
+            <h3>手机电脑同步</h3>
+            <p id="sync-status">尚未配置云同步</p>
+          </div>
+        </div>
+        <button id="open-sync-settings" class="button secondary" type="button">同步设置</button>
+      </section>
+
       <section class="management-section backup-section">
         <div class="management-heading">
           <div>
             <h3>换设备备份</h3>
-            <p>导出为 JSON 文件；在新设备导入时会与现有数据合并并跳过重复项。</p>
+            <p>导出为 JSON 文件，通常保存在“下载/Download”文件夹；在新设备导入时会与现有数据合并并跳过重复项。</p>
+            <p id="backup-status" class="backup-status"></p>
           </div>
         </div>
         <div class="backup-actions">
@@ -294,6 +327,79 @@
       </section>
     </dialog>
 
+    <dialog id="sync-dialog" class="sheet">
+      <div class="sheet-header">
+        <div>
+          <p class="eyebrow">Supabase</p>
+          <h2>云同步设置</h2>
+        </div>
+        <button class="icon-button close-dialog" type="button" aria-label="关闭">×</button>
+      </div>
+
+      <section class="sync-panel">
+        <h3>1. 项目配置</h3>
+        <p class="dialog-copy">
+          Project URL 和 publishable key 只保存在当前设备，不会写入备份或 Git。不要在这里填写 service_role 密钥。
+        </p>
+        <p class="dialog-copy sync-setup-links">
+          还没有项目？先
+          <a href="https://supabase.com/dashboard" target="_blank" rel="noreferrer">打开 Supabase 控制台</a>
+          创建项目，再在 SQL Editor 中运行
+          <a href="supabase-schema.sql" download>冰小记数据库初始化 SQL</a>。部署提醒函数后，再运行
+          <a href="supabase-reminder-cron.sql" download>每分钟提醒任务 SQL</a>。
+        </p>
+        <label class="field full">
+          <span>Supabase Project URL</span>
+          <input id="sync-project-url" type="url" inputmode="url" autocomplete="off" placeholder="https://xxxx.supabase.co" />
+        </label>
+        <label class="field full">
+          <span>Publishable / anon key</span>
+          <input id="sync-publishable-key" type="password" autocomplete="off" placeholder="sb_publishable_..." />
+        </label>
+        <label class="field full">
+          <span>Web Push VAPID 公钥</span>
+          <input id="sync-vapid-public-key" type="password" autocomplete="off" placeholder="仅填写公钥，不要填写私钥" />
+        </label>
+        <div class="sheet-actions">
+          <button id="save-sync-config" class="button primary" type="button">保存到本机</button>
+          <button id="clear-sync-config" class="button ghost danger-text" type="button">清除配置</button>
+        </div>
+      </section>
+
+      <section id="sync-account-section" class="sync-panel hidden">
+        <h3>2. 登录同步账号</h3>
+        <p class="dialog-copy">手机和电脑使用同一个邮箱账号登录。密码仅用于本次登录，不会保存在冰小记中。</p>
+        <label class="field full">
+          <span>邮箱</span>
+          <input id="sync-email" type="email" autocomplete="username" placeholder="name@example.com" />
+        </label>
+        <label class="field full">
+          <span>密码</span>
+          <input id="sync-password" type="password" autocomplete="current-password" minlength="6" />
+        </label>
+        <div class="sheet-actions">
+          <button id="sync-login" class="button primary" type="button">登录</button>
+        </div>
+      </section>
+
+      <section id="sync-session-section" class="sync-panel hidden">
+        <h3>同步账号</h3>
+        <p id="sync-account-email" class="dialog-copy"></p>
+        <div class="sheet-actions">
+          <button id="sync-now" class="button primary" type="button">立即同步</button>
+          <button id="sync-logout" class="button secondary" type="button">退出登录</button>
+        </div>
+        <div class="notification-settings">
+          <strong>手机通知</strong>
+          <p id="notification-status" class="dialog-copy">尚未开启</p>
+          <button id="toggle-notifications" class="button secondary" type="button">开启手机通知</button>
+        </div>
+      </section>
+
+      <p id="sync-dialog-status" class="sync-dialog-status" role="status" aria-live="polite"></p>
+    </dialog>
+
+    <script src="sync.js" defer></script>
     <script src="app.js" defer></script>
   </body>
 </html>

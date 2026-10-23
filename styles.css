@@ -684,6 +684,10 @@ select {
   gap: 12px;
 }
 
+.date-time-grid {
+  grid-template-columns: 1.2fr 1fr 1fr;
+}
+
 .field {
   display: grid;
   gap: 7px;
@@ -985,6 +989,73 @@ select {
   line-height: 1.55;
 }
 
+.management-heading .backup-status {
+  margin-top: 7px;
+  color: var(--primary);
+  font-weight: 700;
+}
+
+.sync-section {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 16px 18px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: #fdf8f1;
+}
+
+.sync-section .management-heading {
+  min-width: 0;
+}
+
+.sync-section .button {
+  flex: 0 0 auto;
+}
+
+.sync-panel + .sync-panel {
+  margin-top: 22px;
+  padding-top: 22px;
+  border-top: 1px solid var(--line);
+}
+
+.sync-panel h3 {
+  margin: 0 0 8px;
+}
+
+.sync-setup-links a {
+  color: var(--primary);
+  font-weight: 700;
+}
+
+.sync-dialog-status {
+  min-height: 1.4em;
+  margin: 18px 0 0;
+  color: var(--muted);
+  font-size: 0.84rem;
+  line-height: 1.5;
+}
+
+.sync-dialog-status.success {
+  color: var(--primary);
+}
+
+.sync-dialog-status.error {
+  color: var(--danger);
+}
+
+.notification-settings {
+  margin-top: 18px;
+  padding: 14px;
+  border-radius: 14px;
+  background: var(--primary-soft);
+}
+
+.notification-settings .dialog-copy {
+  margin: 4px 0 12px;
+}
+
 .management-list {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1084,16 +1155,16 @@ select {
 
 @media (max-width: 760px) {
   .app-shell {
-    padding: max(10px, env(safe-area-inset-top)) 10px max(78px, calc(66px + env(safe-area-inset-bottom)));
+    padding: max(6px, env(safe-area-inset-top)) 10px max(78px, calc(66px + env(safe-area-inset-bottom)));
+  }
+
+  .topbar {
+    min-height: 34px;
   }
 
   .topbar h1 {
-    font-size: 1.75rem;
-  }
-
-  .eyebrow {
-    margin-bottom: 1px;
-    font-size: 0.66rem;
+    font-size: 1.65rem;
+    line-height: 1;
   }
 
   .topbar-actions {
@@ -1102,7 +1173,7 @@ select {
 
   .topbar-actions .button,
   .topbar-actions .icon-button {
-    min-height: 36px;
+    min-height: 34px;
     border-radius: 12px;
   }
 
@@ -1111,7 +1182,7 @@ select {
   }
 
   .topbar-actions .icon-button {
-    width: 36px;
+    width: 34px;
     font-size: 1.2rem;
   }
 
@@ -1119,7 +1190,7 @@ select {
     display: grid;
     grid-template-columns: auto 1fr;
     gap: 7px;
-    margin: 10px 0 8px;
+    margin: 7px 0 8px;
     padding: 7px;
     border-radius: 16px;
   }
@@ -1257,6 +1328,15 @@ select {
   .field-grid {
     grid-template-columns: 1fr;
     gap: 0;
+  }
+
+  .date-time-grid {
+    grid-template-columns: 1fr 1fr;
+    gap: 0 8px;
+  }
+
+  .date-time-grid .date-field {
+    grid-column: 1 / -1;
   }
 
   .sheet {

@@ -1,0 +1,9 @@
+# Supabase or other local credentials
+.env
+.env.*
+!.env.example
+supabase.local.*
+config.local.*
+
+# Personal exports
+冰小记备份-*.json

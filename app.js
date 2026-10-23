@@ -6,10 +6,17 @@ const META_STORE = "metadata";
 const DRAFT_KEY = "xiaoji-item-draft";
 const VIEW_KEY = "xiaoji-view";
 const OPTION_LIBRARY_KEY = "xiaoji-option-library";
+const OPTIONS_UPDATED_AT_KEY = "xiaoji-options-updated-at";
+const LAST_SYNC_KEY = "xiaoji-last-sync";
+const LAST_BACKUP_KEY = "xiaoji-last-backup";
+const LAST_BACKUP_REMINDER_KEY = "xiaoji-last-backup-reminder";
 const DAY_MS = 24 * 60 * 60 * 1000;
+const BACKUP_REMINDER_INTERVAL_MS = 7 * DAY_MS;
+const AUTO_SYNC_DELAY_MS = 1200;
 const TRASH_RETENTION_MS = 30 * DAY_MS;
 const OPTION_LIBRARY_VERSION = 2;
-const DATA_SCHEMA_VERSION = 2;
+const DATA_SCHEMA_VERSION = 5;
+const REMINDER_LEAD_MS = 5 * 60 * 1000;
 const COLOR_PRESETS = [
   "#f5bd4f",
   "#f28c52",
@@ -43,7 +50,14 @@ const state = {
   completionTimers: new Map(),
   undoIds: [],
   undoTimer: null,
-  installPrompt: null
+  installPrompt: null,
+  optionsUpdatedAt: "1970-01-01T00:00:00.000Z",
+  syncClient: null,
+  syncTimer: null,
+  syncInProgress: false,
+  syncApplying: false,
+  syncMessage: "尚未配置云同步",
+  syncMessageType: "idle"
 };
 
 const elements = {};
@@ -52,8 +66,10 @@ document.addEventListener("DOMContentLoaded", init);
 
 async function init() {
   mapElements();
+  state.syncClient = new window.XiaojiSyncClient();
   loadOptionLibrary();
   renderColorPresets();
+  renderTimeOptions();
   bindEvents();
   await openDatabase();
   await ensureDataSchemaMetadata();
@@ -61,6 +77,10 @@ async function init() {
   await refreshData();
   setView(state.view);
   registerServiceWorker();
+  requestPersistentStorage();
+  window.setTimeout(checkBackupReminder, 300);
+  window.addEventListener("online", () => queueAutoSync(true));
+  if (state.syncClient.isSignedIn()) window.setTimeout(() => syncNow({ silent: true }), 500);
 }
 
 function mapElements() {
@@ -84,6 +104,7 @@ function mapElements() {
     "item-title",
     "item-date",
     "item-time",
+    "item-deadline-time",
     "item-category",
     "tag-options",
     "new-category-name",
@@ -98,6 +119,7 @@ function mapElements() {
     "item-recurrence",
     "item-pinned",
     "item-weekly",
+    "item-reminder",
     "delete-item",
     "save-template-from-item",
     "draft-hint",
@@ -119,10 +141,33 @@ function mapElements() {
     "template-target-date",
     "trash-dialog",
     "trash-list",
+    "backup-reminder-dialog",
+    "backup-reminder-later",
+    "backup-reminder-export",
     "data-dialog",
     "category-management-list",
     "tag-management-list",
     "export-data",
+    "backup-status",
+    "sync-status",
+    "open-sync-settings",
+    "sync-dialog",
+    "sync-project-url",
+    "sync-publishable-key",
+    "sync-vapid-public-key",
+    "save-sync-config",
+    "clear-sync-config",
+    "sync-account-section",
+    "sync-email",
+    "sync-password",
+    "sync-login",
+    "sync-session-section",
+    "sync-account-email",
+    "sync-now",
+    "sync-logout",
+    "notification-status",
+    "toggle-notifications",
+    "sync-dialog-status",
     "choose-import",
     "import-file",
     "snackbar",
@@ -171,7 +216,9 @@ function bindEvents() {
   elements.addItem.addEventListener("click", () => openItemDialog());
   elements.itemForm.addEventListener("submit", saveItemFromForm);
   elements.itemForm.addEventListener("input", saveDraft);
-  elements.itemTime.addEventListener("change", normalizeTimeInput);
+  elements.itemTime.addEventListener("change", validateTimeRange);
+  elements.itemTime.addEventListener("change", updateReminderFormState);
+  elements.itemDeadlineTime.addEventListener("change", validateTimeRange);
   elements.categoryColorPresets.addEventListener("click", selectPresetColor);
   elements.tagColorPresets.addEventListener("click", selectPresetColor);
   elements.newCategoryColor.addEventListener("input", syncPresetSelection);
@@ -198,7 +245,19 @@ function bindEvents() {
 
   elements.openTrash.addEventListener("click", openTrashDialog);
   elements.trashList.addEventListener("click", handleTrashClick);
+  elements.backupReminderLater.addEventListener("click", () => elements.backupReminderDialog.close());
+  elements.backupReminderExport.addEventListener("click", () => {
+    exportAllData();
+    elements.backupReminderDialog.close();
+  });
   elements.openData.addEventListener("click", openDataDialog);
+  elements.openSyncSettings.addEventListener("click", openSyncDialog);
+  elements.saveSyncConfig.addEventListener("click", saveSyncConfig);
+  elements.clearSyncConfig.addEventListener("click", clearSyncConfig);
+  elements.syncLogin.addEventListener("click", signInToSync);
+  elements.syncNow.addEventListener("click", () => syncNow());
+  elements.syncLogout.addEventListener("click", signOutOfSync);
+  elements.toggleNotifications.addEventListener("click", togglePushNotifications);
   elements.categoryManagementList.addEventListener("click", handleOptionDelete);
   elements.tagManagementList.addEventListener("click", handleOptionDelete);
   elements.exportData.addEventListener("click", exportAllData);
@@ -216,6 +275,15 @@ function bindEvents() {
     state.installPrompt = null;
     elements.installButton.classList.add("hidden");
   });
+  navigator.serviceWorker?.addEventListener("message", handleServiceWorkerMessage);
+}
+
+function handleServiceWorkerMessage(event) {
+  if (event.data?.type !== "OPEN_REMINDER") return;
+  if (event.data.date) state.selectedDate = fromDateKey(event.data.date);
+  setView("day");
+  const item = findItem(event.data.itemId);
+  if (item && !item.deletedAt) openItemDialog(item);
 }
 
 async function openDatabase() {
@@ -266,7 +334,10 @@ async function storePut(storeName, value) {
   return new Promise((resolve, reject) => {
     const transaction = db.transaction(storeName, "readwrite");
     transaction.objectStore(storeName).put(value);
-    transaction.oncomplete = () => resolve(value);
+    transaction.oncomplete = () => {
+      queueAutoSyncForStore(storeName);
+      resolve(value);
+    };
     transaction.onerror = () => reject(transaction.error);
   });
 }
@@ -278,17 +349,10 @@ async function storePutMany(storeName, values) {
     const transaction = db.transaction(storeName, "readwrite");
     const store = transaction.objectStore(storeName);
     values.forEach((value) => store.put(value));
-    transaction.oncomplete = resolve;
-    transaction.onerror = () => reject(transaction.error);
-  });
-}
-
-async function storeDelete(storeName, id) {
-  const db = await openDatabase();
-  return new Promise((resolve, reject) => {
-    const transaction = db.transaction(storeName, "readwrite");
-    transaction.objectStore(storeName).delete(id);
-    transaction.oncomplete = resolve;
+    transaction.oncomplete = () => {
+      queueAutoSyncForStore(storeName);
+      resolve();
+    };
     transaction.onerror = () => reject(transaction.error);
   });
 }
@@ -297,7 +361,10 @@ async function refreshData() {
   const [items, templates] = await Promise.all([storeGetAll(ITEM_STORE), storeGetAll(TEMPLATE_STORE)]);
   state.items = items.map(normalizeItemRecord);
   state.templates = templates.map(normalizeTemplateRecord).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
-  mergeOptionsFromSavedData([...state.items, ...state.templates]);
+  mergeOptionsFromSavedData([
+    ...state.items.filter((item) => !item.deletedAt),
+    ...state.templates.filter((template) => !template.deletedAt)
+  ]);
   render();
 }
 
@@ -310,18 +377,35 @@ async function ensureDataSchemaMetadata() {
 }
 
 function normalizeItemRecord(item) {
+  const reminderEnabled =
+    typeof item.reminderEnabled === "boolean" ? item.reminderEnabled : Boolean(item.time);
   return {
     ...item,
     tags: Array.isArray(item.tags) ? item.tags : [],
+    deadlineTime: typeof item.deadlineTime === "string" ? item.deadlineTime : "",
+    reminderEnabled,
+    reminderAt:
+      reminderEnabled && item.time
+        ? isValidTimestamp(item.reminderAt)
+          ? item.reminderAt
+          : buildReminderAt(item.date, item.time)
+        : null,
+    timeZone: typeof item.timeZone === "string" ? item.timeZone : getCurrentTimeZone(),
+    purgedAt: typeof item.purgedAt === "string" ? item.purgedAt : null,
     weeklyOnly: Boolean(item.weeklyOnly),
     dataSchemaVersion: DATA_SCHEMA_VERSION
   };
 }
 
 function normalizeTemplateRecord(template) {
+  const reminderEnabled =
+    typeof template.reminderEnabled === "boolean" ? template.reminderEnabled : Boolean(template.time);
   return {
     ...template,
     tags: Array.isArray(template.tags) ? template.tags : [],
+    deadlineTime: typeof template.deadlineTime === "string" ? template.deadlineTime : "",
+    reminderEnabled,
+    deletedAt: typeof template.deletedAt === "string" ? template.deletedAt : null,
     weeklyOnly: Boolean(template.weeklyOnly),
     dataSchemaVersion: DATA_SCHEMA_VERSION
   };
@@ -330,8 +414,15 @@ function normalizeTemplateRecord(template) {
 async function purgeExpiredTrash() {
   const threshold = Date.now() - TRASH_RETENTION_MS;
   const items = await storeGetAll(ITEM_STORE);
-  const expired = items.filter((item) => item.deletedAt && new Date(item.deletedAt).getTime() < threshold);
-  await Promise.all(expired.map((item) => storeDelete(ITEM_STORE, item.id)));
+  const expired = items.filter(
+    (item) => item.deletedAt && !item.purgedAt && new Date(item.deletedAt).getTime() < threshold
+  );
+  if (!expired.length) return;
+  const now = new Date().toISOString();
+  await storePutMany(
+    ITEM_STORE,
+    expired.map((item) => ({ ...item, purgedAt: now, updatedAt: now }))
+  );
 }
 
 function setView(view) {
@@ -528,7 +619,12 @@ function renderMonthView() {
 
 function renderItemCard(item) {
   const categoryColor = getCategoryColor(item.category);
-  const plainMeta = [item.time || "全天", item.seriesId ? recurrenceLabel(item.recurrence) : "", item.pinned ? "已置顶" : ""]
+  const plainMeta = [
+    formatTimeRange(item),
+    item.reminderEnabled && item.time && !item.completed ? "提前5分钟提醒" : "",
+    item.seriesId ? recurrenceLabel(item.recurrence) : "",
+    item.pinned ? "已置顶" : ""
+  ]
     .filter(Boolean)
     .map((entry) => `<span>${escapeHtml(entry)}</span>`);
   const categoryMeta = item.category
@@ -593,7 +689,9 @@ function matchesSearch(item) {
 function compareItems(a, b) {
   if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;
   if (a.completed !== b.completed) return a.completed ? 1 : -1;
-  return (a.time || "99:99").localeCompare(b.time || "99:99") || a.createdAt.localeCompare(b.createdAt);
+  const aSortTime = a.time || a.deadlineTime || "99:99";
+  const bSortTime = b.time || b.deadlineTime || "99:99";
+  return aSortTime.localeCompare(bSortTime) || a.createdAt.localeCompare(b.createdAt);
 }
 
 function handlePlannerClick(event) {
@@ -721,15 +819,28 @@ function loadOptionLibrary() {
     ? saved.categories.map(normalizeOption).filter(Boolean)
     : DEFAULT_CATEGORIES.map((category) => ({ ...category }));
   state.tags = Array.isArray(saved?.tags) ? saved.tags.map(normalizeOption).filter(Boolean) : [];
+  state.optionsUpdatedAt =
+    typeof saved?.updatedAt === "string"
+      ? saved.updatedAt
+      : localStorage.getItem(OPTIONS_UPDATED_AT_KEY) || (saved ? new Date().toISOString() : "1970-01-01T00:00:00.000Z");
 
+  let changed = false;
   if (!saved || Number(saved.version || 0) < OPTION_LIBRARY_VERSION) {
     DEFAULT_CATEGORIES.forEach((category) => {
       const existing = state.categories.find((candidate) => candidate.name === category.name);
       if (existing) existing.color = category.color;
-      else state.categories.push({ ...category });
+      else {
+        state.categories.push({ ...category });
+        changed = true;
+      }
     });
   }
-  saveOptionLibrary();
+  if (saved && Number(saved.version || 0) < OPTION_LIBRARY_VERSION) {
+    state.optionsUpdatedAt = new Date().toISOString();
+    changed = true;
+  }
+  saveOptionLibrary({ updatedAt: state.optionsUpdatedAt, schedule: false });
+  if (changed) queueAutoSync();
 }
 
 function normalizeOption(option) {
@@ -757,15 +868,19 @@ function mergeOptionsFromSavedData(records) {
   if (changed) saveOptionLibrary();
 }
 
-function saveOptionLibrary() {
+function saveOptionLibrary({ updatedAt = new Date().toISOString(), schedule = true } = {}) {
+  state.optionsUpdatedAt = updatedAt;
+  localStorage.setItem(OPTIONS_UPDATED_AT_KEY, updatedAt);
   localStorage.setItem(
     OPTION_LIBRARY_KEY,
     JSON.stringify({
       version: OPTION_LIBRARY_VERSION,
+      updatedAt,
       categories: state.categories,
       tags: state.tags
     })
   );
+  if (schedule) queueAutoSync();
 }
 
 function renderCategoryOptions(selectedName = elements.itemCategory.value) {
@@ -839,13 +954,60 @@ function addTag() {
   showSnackbar(existing ? "已选择这个标签" : "标签已添加并选中", false);
 }
 
-function normalizeTimeInput() {
-  if (!elements.itemTime.value) return;
-  const [hour, minute] = elements.itemTime.value.split(":").map(Number);
-  const roundedMinutes = Math.min(23 * 60 + 55, Math.round((hour * 60 + minute) / 5) * 5);
-  elements.itemTime.value = `${String(Math.floor(roundedMinutes / 60)).padStart(2, "0")}:${String(
-    roundedMinutes % 60
-  ).padStart(2, "0")}`;
+function renderTimeOptions() {
+  const options = ['<option value="">未设置</option>'];
+  for (let minutes = 0; minutes < 24 * 60; minutes += 5) {
+    const value = `${String(Math.floor(minutes / 60)).padStart(2, "0")}:${String(minutes % 60).padStart(2, "0")}`;
+    options.push(`<option value="${value}">${value}</option>`);
+  }
+  elements.itemTime.innerHTML = options.join("");
+  elements.itemDeadlineTime.innerHTML = options.join("");
+}
+
+function setTimeSelectValue(select, value) {
+  select.querySelector('option[data-legacy-time]')?.remove();
+  const safeValue = typeof value === "string" ? value : "";
+  if (safeValue && !Array.from(select.options).some((option) => option.value === safeValue)) {
+    const legacyOption = document.createElement("option");
+    legacyOption.value = safeValue;
+    legacyOption.textContent = `${safeValue}（原记录）`;
+    legacyOption.dataset.legacyTime = "true";
+    select.append(legacyOption);
+  }
+  select.value = safeValue;
+}
+
+function validateTimeRange() {
+  const invalid =
+    elements.itemTime.value &&
+    elements.itemDeadlineTime.value &&
+    elements.itemDeadlineTime.value < elements.itemTime.value;
+  elements.itemDeadlineTime.setCustomValidity(invalid ? "截止时间不能早于开始时间" : "");
+  return !invalid;
+}
+
+function updateReminderFormState() {
+  elements.itemReminder.disabled = !elements.itemTime.value;
+}
+
+function buildReminderAt(dateKey, time) {
+  if (!dateKey || !time) return null;
+  const [hour, minute] = time.split(":").map(Number);
+  if (!Number.isInteger(hour) || !Number.isInteger(minute)) return null;
+  const start = fromDateKey(dateKey);
+  start.setHours(hour, minute, 0, 0);
+  return new Date(start.getTime() - REMINDER_LEAD_MS).toISOString();
+}
+
+function getCurrentTimeZone() {
+  return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+}
+
+function formatTimeRange(item) {
+  if (item.time && item.deadlineTime) return `${item.time}–${item.deadlineTime}`;
+  if (item.time) return item.time;
+  if (item.deadlineTime) return `截止 ${item.deadlineTime}`;
+  return "全天";
 }
 
 function updateWeeklyFormState() {
@@ -890,13 +1052,15 @@ function openItemDialog(item = null, defaults = {}) {
     elements.itemId.value = item.id;
     elements.itemTitle.value = item.title;
     elements.itemDate.value = item.date;
-    elements.itemTime.value = item.time || "";
+    setTimeSelectValue(elements.itemTime, item.time);
+    setTimeSelectValue(elements.itemDeadlineTime, item.deadlineTime);
     elements.itemCategory.value = item.category || "";
     elements.itemNotes.value = item.notes || "";
     elements.itemRecurrence.value = item.recurrence || "none";
     elements.itemRecurrence.disabled = Boolean(item.seriesId);
     elements.itemPinned.checked = Boolean(item.pinned);
     elements.itemWeekly.checked = Boolean(item.weeklyOnly);
+    elements.itemReminder.checked = Boolean(item.reminderEnabled);
     elements.itemWeekly.disabled = Boolean(item.seriesId);
     elements.deleteItem.classList.remove("hidden");
   } else {
@@ -904,6 +1068,7 @@ function openItemDialog(item = null, defaults = {}) {
     elements.itemId.value = "";
     elements.itemDate.value = defaults.date || toDateKey(state.selectedDate);
     elements.itemWeekly.checked = Boolean(defaults.weeklyOnly);
+    elements.itemReminder.checked = true;
     elements.deleteItem.classList.add("hidden");
     restoreDraft();
     if (defaults.weeklyOnly) {
@@ -913,26 +1078,38 @@ function openItemDialog(item = null, defaults = {}) {
   }
 
   updateWeeklyFormState();
+  updateReminderFormState();
   elements.itemDialog.showModal();
   window.setTimeout(() => elements.itemTitle.focus(), 50);
 }
 
 function readItemForm() {
+  const time = elements.itemTime.value;
+  const date = elements.itemDate.value;
+  const reminderEnabled = Boolean(time && elements.itemReminder.checked);
   return {
     title: elements.itemTitle.value.trim(),
-    date: elements.itemDate.value,
-    time: elements.itemTime.value,
+    date,
+    time,
+    deadlineTime: elements.itemDeadlineTime.value,
     category: elements.itemCategory.value,
     tags: Array.from(elements.tagOptions.querySelectorAll('input[type="checkbox"]:checked'), (input) => input.value),
     notes: elements.itemNotes.value.trim(),
     recurrence: elements.itemRecurrence.value,
     pinned: elements.itemPinned.checked,
-    weeklyOnly: elements.itemWeekly.checked
+    weeklyOnly: elements.itemWeekly.checked,
+    reminderEnabled,
+    reminderAt: reminderEnabled ? buildReminderAt(date, time) : null,
+    timeZone: getCurrentTimeZone()
   };
 }
 
 async function saveItemFromForm(event) {
   event.preventDefault();
+  if (!validateTimeRange()) {
+    elements.itemDeadlineTime.reportValidity();
+    return;
+  }
   const formValue = readItemForm();
   if (!formValue.title || !formValue.date) return;
 
@@ -967,6 +1144,7 @@ async function createItemsFromDefinition(definition, timestamp = new Date().toIS
     title: definition.title,
     date,
     time: definition.time || "",
+    deadlineTime: definition.deadlineTime || "",
     category: definition.category || "",
     tags: definition.tags || [],
     notes: definition.notes || "",
@@ -975,10 +1153,15 @@ async function createItemsFromDefinition(definition, timestamp = new Date().toIS
     completed: false,
     pinned: Boolean(definition.pinned),
     weeklyOnly: Boolean(definition.weeklyOnly),
+    reminderEnabled: Boolean(definition.time && definition.reminderEnabled),
+    reminderAt:
+      definition.time && definition.reminderEnabled ? buildReminderAt(date, definition.time) : null,
+    timeZone: definition.timeZone || getCurrentTimeZone(),
     dataSchemaVersion: DATA_SCHEMA_VERSION,
     createdAt: timestamp,
     updatedAt: timestamp,
-    deletedAt: null
+    deletedAt: null,
+    purgedAt: null
   }));
   await storePutMany(ITEM_STORE, items);
   return items;
@@ -1023,7 +1206,8 @@ function restoreDraft() {
     const draft = JSON.parse(rawDraft);
     elements.itemTitle.value = draft.title || "";
     elements.itemDate.value = draft.date || toDateKey(state.selectedDate);
-    elements.itemTime.value = draft.time || "";
+    setTimeSelectValue(elements.itemTime, draft.time);
+    setTimeSelectValue(elements.itemDeadlineTime, draft.deadlineTime);
     renderCategoryOptions(draft.category || "");
     renderTagOptions(draft.tags || []);
     elements.itemCategory.value = draft.category || "";
@@ -1031,7 +1215,10 @@ function restoreDraft() {
     elements.itemRecurrence.value = draft.recurrence || "none";
     elements.itemPinned.checked = Boolean(draft.pinned);
     elements.itemWeekly.checked = Boolean(draft.weeklyOnly);
+    elements.itemReminder.checked =
+      typeof draft.reminderEnabled === "boolean" ? draft.reminderEnabled : Boolean(draft.time);
     updateWeeklyFormState();
+    updateReminderFormState();
     elements.draftHint.classList.remove("hidden");
   } catch {
     localStorage.removeItem(DRAFT_KEY);
@@ -1066,18 +1253,21 @@ async function copyItemToDate(event) {
   const item = findItem(state.copyItemId);
   if (!item || !elements.copyDate.value) return;
   const now = new Date().toISOString();
+  const date = elements.copyDate.value;
   await storePut(ITEM_STORE, {
     ...item,
     id: crypto.randomUUID(),
-    date: elements.copyDate.value,
+    date,
     recurrence: "none",
     seriesId: null,
     completed: false,
+    reminderAt: item.reminderEnabled && item.time ? buildReminderAt(date, item.time) : null,
+    timeZone: getCurrentTimeZone(),
     createdAt: now,
     updatedAt: now,
     deletedAt: null
   });
-  state.selectedDate = fromDateKey(elements.copyDate.value);
+  state.selectedDate = fromDateKey(date);
   elements.copyDialog.close();
   await refreshData();
   showSnackbar("已复制到所选日期", false);
@@ -1097,6 +1287,10 @@ async function saveTemplateFromForm() {
     elements.itemTitle.focus();
     return;
   }
+  if (!validateTimeRange()) {
+    elements.itemDeadlineTime.reportValidity();
+    return;
+  }
   await saveTemplate(definition);
   showSnackbar("已保存为常用模板", false);
 }
@@ -1107,17 +1301,22 @@ async function saveTemplate(source) {
     id: crypto.randomUUID(),
     title: source.title,
     time: source.time || "",
+    deadlineTime: source.deadlineTime || "",
     category: source.category || "",
     tags: source.tags || [],
     notes: source.notes || "",
     recurrence: "none",
     pinned: Boolean(source.pinned),
     weeklyOnly: Boolean(source.weeklyOnly),
+    reminderEnabled: Boolean(source.time && source.reminderEnabled),
     dataSchemaVersion: DATA_SCHEMA_VERSION,
     createdAt: now,
-    updatedAt: now
+    updatedAt: now,
+    deletedAt: null
   });
-  state.templates = (await storeGetAll(TEMPLATE_STORE)).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  state.templates = (await storeGetAll(TEMPLATE_STORE))
+    .map(normalizeTemplateRecord)
+    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 }
 
 function requestDelete(id) {
@@ -1150,7 +1349,7 @@ async function deleteWithScope(scope) {
 
   await storePutMany(
     ITEM_STORE,
-    affected.map((candidate) => ({ ...candidate, deletedAt, updatedAt: deletedAt }))
+    affected.map((candidate) => ({ ...candidate, deletedAt, purgedAt: null, updatedAt: deletedAt }))
   );
   state.undoIds = affected.map((candidate) => candidate.id);
   closeOpenItemDialogs();
@@ -1164,7 +1363,7 @@ async function undoLastDelete() {
   const now = new Date().toISOString();
   await storePutMany(
     ITEM_STORE,
-    affected.map((item) => ({ ...item, deletedAt: null, updatedAt: now }))
+    affected.map((item) => ({ ...item, deletedAt: null, purgedAt: null, updatedAt: now }))
   );
   state.undoIds = [];
   hideSnackbar();
@@ -1177,7 +1376,8 @@ function openTemplatesDialog() {
 }
 
 function renderTemplates() {
-  if (!state.templates.length) {
+  const visibleTemplates = state.templates.filter((template) => !template.deletedAt);
+  if (!visibleTemplates.length) {
     elements.templatesList.innerHTML = `
       <div class="empty-state">
         <div class="empty-icon">＋</div>
@@ -1187,13 +1387,13 @@ function renderTemplates() {
     return;
   }
 
-  elements.templatesList.innerHTML = state.templates
+  elements.templatesList.innerHTML = visibleTemplates
     .map(
       (template) => `
         <div class="template-row">
           <div>
             <strong>${escapeHtml(template.title)}</strong>
-            <small>${escapeHtml([template.time || "全天", template.category].filter(Boolean).join(" · "))}</small>
+            <small>${escapeHtml([formatTimeRange(template), template.category].filter(Boolean).join(" · "))}</small>
           </div>
           <div class="template-actions">
             <button class="mini-button" type="button" data-use-template="${template.id}">使用</button>
@@ -1208,7 +1408,9 @@ function renderTemplates() {
 async function handleTemplateClick(event) {
   const useButton = event.target.closest("[data-use-template]");
   if (useButton) {
-    const template = state.templates.find((candidate) => candidate.id === useButton.dataset.useTemplate);
+    const template = state.templates.find(
+      (candidate) => candidate.id === useButton.dataset.useTemplate && !candidate.deletedAt
+    );
     if (!template) return;
     state.templateId = template.id;
     elements.templateDateTitle.textContent = template.title;
@@ -1220,15 +1422,18 @@ async function handleTemplateClick(event) {
 
   const deleteButton = event.target.closest("[data-delete-template]");
   if (deleteButton) {
-    await storeDelete(TEMPLATE_STORE, deleteButton.dataset.deleteTemplate);
-    state.templates = state.templates.filter((template) => template.id !== deleteButton.dataset.deleteTemplate);
+    const template = state.templates.find((candidate) => candidate.id === deleteButton.dataset.deleteTemplate);
+    if (!template) return;
+    const now = new Date().toISOString();
+    await storePut(TEMPLATE_STORE, { ...template, deletedAt: now, updatedAt: now });
+    await refreshData();
     renderTemplates();
   }
 }
 
 async function createItemFromTemplate(event) {
   event.preventDefault();
-  const template = state.templates.find((candidate) => candidate.id === state.templateId);
+  const template = state.templates.find((candidate) => candidate.id === state.templateId && !candidate.deletedAt);
   if (!template || !elements.templateTargetDate.value) return;
   await createItemsFromDefinition({
     ...template,
@@ -1247,7 +1452,7 @@ function openTrashDialog() {
 
 function renderTrash() {
   const deletedItems = state.items
-    .filter((item) => item.deletedAt)
+    .filter((item) => item.deletedAt && !item.purgedAt)
     .sort((a, b) => b.deletedAt.localeCompare(a.deletedAt));
 
   if (!deletedItems.length) {
@@ -1283,7 +1488,12 @@ async function handleTrashClick(event) {
   if (restoreButton) {
     const item = findItem(restoreButton.dataset.restoreItem);
     if (!item) return;
-    await storePut(ITEM_STORE, { ...item, deletedAt: null, updatedAt: new Date().toISOString() });
+    await storePut(ITEM_STORE, {
+      ...item,
+      deletedAt: null,
+      purgedAt: null,
+      updatedAt: new Date().toISOString()
+    });
     await refreshData();
     renderTrash();
     return;
@@ -1291,7 +1501,10 @@ async function handleTrashClick(event) {
 
   const purgeButton = event.target.closest("[data-purge-item]");
   if (purgeButton) {
-    await storeDelete(ITEM_STORE, purgeButton.dataset.purgeItem);
+    const item = findItem(purgeButton.dataset.purgeItem);
+    if (!item) return;
+    const now = new Date().toISOString();
+    await storePut(ITEM_STORE, { ...item, purgedAt: now, updatedAt: now });
     await refreshData();
     renderTrash();
   }
@@ -1299,7 +1512,453 @@ async function handleTrashClick(event) {
 
 function openDataDialog() {
   renderOptionManagement();
+  renderBackupStatus();
+  renderSyncStatus();
   elements.dataDialog.showModal();
+}
+
+async function requestPersistentStorage() {
+  if (!navigator.storage?.persist) return;
+  try {
+    await navigator.storage.persist();
+  } catch (error) {
+    console.warn("无法申请持久化存储，仍可通过导出备份保护数据", error);
+  }
+}
+
+function checkBackupReminder() {
+  const hasData =
+    state.items.some((item) => !item.deletedAt) || state.templates.some((template) => !template.deletedAt);
+  if (!hasData || elements.backupReminderDialog.open) return;
+
+  const lastBackup = Number(localStorage.getItem(LAST_BACKUP_KEY)) || 0;
+  const lastReminder = Number(localStorage.getItem(LAST_BACKUP_REMINDER_KEY)) || 0;
+  const lastBackupActivity = Math.max(lastBackup, lastReminder);
+  if (lastBackupActivity && Date.now() - lastBackupActivity < BACKUP_REMINDER_INTERVAL_MS) return;
+
+  localStorage.setItem(LAST_BACKUP_REMINDER_KEY, String(Date.now()));
+  elements.backupReminderDialog.showModal();
+}
+
+function renderBackupStatus() {
+  const lastBackup = Number(localStorage.getItem(LAST_BACKUP_KEY)) || 0;
+  elements.backupStatus.textContent = lastBackup
+    ? `上次导出：${new Intl.DateTimeFormat("zh-CN", {
+        year: "numeric",
+        month: "long",
+        day: "numeric",
+        hour: "2-digit",
+        minute: "2-digit"
+      }).format(lastBackup)}`
+    : "还没有导出过备份";
+}
+
+function queueAutoSyncForStore(storeName) {
+  if (storeName === ITEM_STORE || storeName === TEMPLATE_STORE) queueAutoSync();
+}
+
+function queueAutoSync(immediate = false) {
+  window.clearTimeout(state.syncTimer);
+  if (
+    state.syncApplying ||
+    state.syncInProgress ||
+    !state.syncClient?.isSignedIn()
+  ) {
+    return;
+  }
+  if (!navigator.onLine) {
+    setSyncMessage("当前离线，数据已保存在本机，联网后会自动同步", "idle");
+    return;
+  }
+  state.syncTimer = window.setTimeout(() => syncNow({ silent: true }), immediate ? 0 : AUTO_SYNC_DELAY_MS);
+}
+
+function setSyncMessage(message, type = "idle") {
+  state.syncMessage = message;
+  state.syncMessageType = type;
+  renderSyncStatus();
+  renderSyncDialog();
+}
+
+function renderSyncStatus() {
+  if (!elements.syncStatus) return;
+  const session = state.syncClient?.getSession();
+  if (!state.syncClient?.isConfigured()) {
+    elements.syncStatus.textContent = "尚未配置云同步";
+    return;
+  }
+  if (!session) {
+    elements.syncStatus.textContent = "项目已配置，尚未登录";
+    return;
+  }
+  const lastSync = localStorage.getItem(LAST_SYNC_KEY);
+  elements.syncStatus.textContent =
+    state.syncMessageType === "error"
+      ? state.syncMessage
+      : lastSync
+        ? `已登录 ${session.user.email || "同步账号"} · 上次同步 ${formatShortDateTime(lastSync)}`
+        : `已登录 ${session.user.email || "同步账号"} · 等待首次同步`;
+}
+
+function openSyncDialog() {
+  const config = state.syncClient.getConfig();
+  elements.syncProjectUrl.value = config?.url || "";
+  elements.syncPublishableKey.value = config?.publishableKey || "";
+  elements.syncVapidPublicKey.value = config?.vapidPublicKey || "";
+  elements.syncPassword.value = "";
+  renderSyncDialog();
+  refreshNotificationStatus();
+  elements.dataDialog.close();
+  elements.syncDialog.showModal();
+}
+
+function renderSyncDialog() {
+  if (!elements.syncDialogStatus) return;
+  const configured = state.syncClient?.isConfigured();
+  const session = state.syncClient?.getSession();
+  elements.syncAccountSection.classList.toggle("hidden", !configured || Boolean(session));
+  elements.syncSessionSection.classList.toggle("hidden", !session);
+  elements.syncAccountEmail.textContent = session
+    ? `当前登录：${session.user.email || session.user.id}`
+    : "";
+  elements.syncDialogStatus.textContent = state.syncMessage;
+  elements.syncDialogStatus.className = `sync-dialog-status ${state.syncMessageType}`;
+  elements.syncNow.disabled = state.syncInProgress;
+}
+
+function saveSyncConfig() {
+  try {
+    state.syncClient.saveConfig(
+      elements.syncProjectUrl.value,
+      elements.syncPublishableKey.value,
+      elements.syncVapidPublicKey.value
+    );
+    elements.syncPassword.value = "";
+    setSyncMessage("项目配置已保存在这台设备，请登录同步账号", "success");
+  } catch (error) {
+    setSyncMessage(error.message, "error");
+  }
+}
+
+async function clearSyncConfig() {
+  window.clearTimeout(state.syncTimer);
+  if (state.syncClient.isSignedIn()) {
+    try {
+      await disablePushNotifications();
+    } catch (error) {
+      setSyncMessage(`清除配置前无法关闭推送：${error.message}`, "error");
+      return;
+    }
+  }
+  state.syncClient.clearConfig();
+  elements.syncProjectUrl.value = "";
+  elements.syncPublishableKey.value = "";
+  elements.syncVapidPublicKey.value = "";
+  elements.syncEmail.value = "";
+  elements.syncPassword.value = "";
+  setSyncMessage("已清除这台设备上的 Supabase 配置和登录会话", "success");
+}
+
+function readSyncCredentials() {
+  const email = elements.syncEmail.value.trim();
+  const password = elements.syncPassword.value;
+  if (!email || !elements.syncEmail.checkValidity()) {
+    elements.syncEmail.reportValidity();
+    throw new window.XiaojiSyncError("请输入有效邮箱");
+  }
+  if (password.length < 6) {
+    elements.syncPassword.reportValidity();
+    throw new window.XiaojiSyncError("密码至少需要 6 位");
+  }
+  return { email, password };
+}
+
+async function signInToSync() {
+  setSyncBusy(true);
+  try {
+    const { email, password } = readSyncCredentials();
+    await state.syncClient.signIn(email, password);
+    elements.syncPassword.value = "";
+    setSyncMessage("登录成功，正在合并本机与云端数据", "success");
+    await syncNow();
+    await refreshNotificationStatus();
+  } catch (error) {
+    setSyncMessage(`登录失败：${error.message}`, "error");
+  } finally {
+    setSyncBusy(false);
+  }
+}
+
+async function signOutOfSync() {
+  setSyncBusy(true);
+  try {
+    await disablePushNotifications();
+    await state.syncClient.signOut();
+    setSyncMessage("已退出同步账号，本机数据仍然保留", "success");
+  } catch (error) {
+    setSyncMessage(error.message, "error");
+  } finally {
+    setSyncBusy(false);
+  }
+}
+
+function setSyncBusy(busy) {
+  [
+    elements.saveSyncConfig,
+    elements.clearSyncConfig,
+    elements.syncLogin,
+    elements.syncNow,
+    elements.syncLogout,
+    elements.toggleNotifications
+  ].forEach((button) => {
+    button.disabled = busy;
+  });
+}
+
+async function refreshNotificationStatus() {
+  if (!elements.notificationStatus) return;
+  if (!("Notification" in window) || !("PushManager" in window)) {
+    elements.notificationStatus.textContent = "当前浏览器不支持 Web Push 通知";
+    elements.toggleNotifications.disabled = true;
+    return;
+  }
+  if (Notification.permission === "denied") {
+    elements.notificationStatus.textContent = "通知权限已被拒绝，请在浏览器设置中允许";
+    elements.toggleNotifications.textContent = "通知已被阻止";
+    elements.toggleNotifications.disabled = true;
+    return;
+  }
+  const registration = await navigator.serviceWorker.ready;
+  const subscription = await registration.pushManager.getSubscription();
+  elements.notificationStatus.textContent = subscription
+    ? "已开启：有开始时间且启用提醒的事项会提前 5 分钟通知"
+    : "尚未开启；首次开启时手机会询问通知权限";
+  elements.toggleNotifications.textContent = subscription ? "关闭手机通知" : "开启手机通知";
+  elements.toggleNotifications.disabled = false;
+}
+
+async function togglePushNotifications() {
+  if (!state.syncClient.isSignedIn()) {
+    setSyncMessage("请先登录同步账号，再开启手机通知", "error");
+    return;
+  }
+  setSyncBusy(true);
+  try {
+    const registration = await navigator.serviceWorker.ready;
+    const existing = await registration.pushManager.getSubscription();
+    if (existing) {
+      await disablePushNotifications(existing);
+      setSyncMessage("已关闭这台设备的手机通知", "success");
+      return;
+    }
+
+    const vapidPublicKey = state.syncClient.getConfig()?.vapidPublicKey;
+    if (!vapidPublicKey) {
+      throw new window.XiaojiSyncError("请先填写 Web Push VAPID 公钥并保存配置");
+    }
+    const permission = await Notification.requestPermission();
+    if (permission !== "granted") {
+      throw new window.XiaojiSyncError("未获得通知权限，请在浏览器设置中允许通知");
+    }
+    const subscription = await registration.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey: urlBase64ToUint8Array(vapidPublicKey)
+    });
+    try {
+      await state.syncClient.savePushSubscription(subscription, getCurrentTimeZone());
+    } catch (error) {
+      await subscription.unsubscribe();
+      throw error;
+    }
+    setSyncMessage("已开启手机通知", "success");
+  } catch (error) {
+    setSyncMessage(`通知设置失败：${error.message}`, "error");
+  } finally {
+    setSyncBusy(false);
+    await refreshNotificationStatus();
+  }
+}
+
+async function disablePushNotifications(subscription = null) {
+  if (!("serviceWorker" in navigator) || !("PushManager" in window)) return;
+  const registration = await navigator.serviceWorker.ready;
+  const current = subscription || (await registration.pushManager.getSubscription());
+  if (!current) return;
+  await state.syncClient.deletePushSubscription(current.endpoint);
+  const unsubscribed = await current.unsubscribe();
+  if (!unsubscribed) throw new window.XiaojiSyncError("浏览器未能取消推送订阅");
+  await refreshNotificationStatus();
+}
+
+function urlBase64ToUint8Array(value) {
+  const padding = "=".repeat((4 - (value.length % 4)) % 4);
+  const base64 = (value + padding).replace(/-/g, "+").replace(/_/g, "/");
+  const raw = window.atob(base64);
+  return Uint8Array.from(raw, (character) => character.charCodeAt(0));
+}
+
+async function syncNow({ silent = false } = {}) {
+  if (state.syncInProgress) return;
+  if (!state.syncClient.isSignedIn()) {
+    if (!silent) setSyncMessage("请先登录同步账号", "error");
+    return;
+  }
+  if (!navigator.onLine) {
+    setSyncMessage("当前离线，数据已保存在本机，联网后会自动同步", "idle");
+    return;
+  }
+
+  state.syncInProgress = true;
+  setSyncBusy(true);
+  if (!silent) setSyncMessage("正在同步本机与云端数据…", "idle");
+
+  try {
+    const session = state.syncClient.getSession();
+    const remoteRecords = await state.syncClient.getRecords();
+    const localRecords = buildLocalSyncRecords(session.user.id);
+    const remoteMap = new Map(remoteRecords.map((record) => [syncRecordKey(record), record]));
+    const localMap = new Map(localRecords.map((record) => [syncRecordKey(record), record]));
+    const recordsToPush = [];
+    const recordsToApply = [];
+
+    localRecords.forEach((localRecord) => {
+      const remoteRecord = remoteMap.get(syncRecordKey(localRecord));
+      if (!remoteRecord || compareSyncTimestamps(localRecord.updated_at, remoteRecord.updated_at) > 0) {
+        recordsToPush.push(localRecord);
+      } else if (compareSyncTimestamps(remoteRecord.updated_at, localRecord.updated_at) > 0) {
+        recordsToApply.push(remoteRecord);
+      }
+    });
+    remoteRecords.forEach((remoteRecord) => {
+      if (!localMap.has(syncRecordKey(remoteRecord))) recordsToApply.push(remoteRecord);
+    });
+
+    await applyRemoteSyncRecords(recordsToApply);
+    await state.syncClient.upsertRecords(recordsToPush);
+    const syncedAt = new Date().toISOString();
+    localStorage.setItem(LAST_SYNC_KEY, syncedAt);
+    setSyncMessage(
+      `同步完成：上传 ${recordsToPush.length} 条，下载 ${recordsToApply.length} 条`,
+      "success"
+    );
+  } catch (error) {
+    console.error("Supabase 同步失败", error);
+    setSyncMessage(`同步失败：${error.message}。本机数据已保留，可稍后重试`, "error");
+  } finally {
+    state.syncInProgress = false;
+    setSyncBusy(false);
+  }
+}
+
+function buildLocalSyncRecords(userId) {
+  const itemRecords = state.items.map((item) => toCloudRecord(userId, "item", item));
+  const templateRecords = state.templates.map((template) => toCloudRecord(userId, "template", template));
+  return [
+    ...itemRecords,
+    ...templateRecords,
+    {
+      user_id: userId,
+      record_type: "options",
+      record_id: "library",
+      payload: {
+        categories: state.categories,
+        tags: state.tags
+      },
+      updated_at: state.optionsUpdatedAt,
+      deleted_at: null
+    }
+  ];
+}
+
+function toCloudRecord(userId, recordType, record) {
+  return {
+    user_id: userId,
+    record_type: recordType,
+    record_id: record.id,
+    payload: record,
+    updated_at: record.updatedAt || record.createdAt || new Date(0).toISOString(),
+    deleted_at: record.deletedAt || null
+  };
+}
+
+async function applyRemoteSyncRecords(records) {
+  if (!records.length) return;
+  const items = [];
+  const templates = [];
+  let remoteOptions = null;
+
+  records.forEach((record) => {
+    if (!record || typeof record.record_id !== "string" || !isValidTimestamp(record.updated_at)) {
+      console.warn("已跳过无效的云端同步记录", record);
+      return;
+    }
+    if (record.record_type === "item" && record.payload && typeof record.payload === "object") {
+      items.push(
+        normalizeItemRecord({
+          ...record.payload,
+          id: record.record_id,
+          updatedAt: record.updated_at,
+          deletedAt: record.deleted_at || null
+        })
+      );
+    }
+    if (record.record_type === "template" && record.payload && typeof record.payload === "object") {
+      templates.push(
+        normalizeTemplateRecord({
+          ...record.payload,
+          id: record.record_id,
+          updatedAt: record.updated_at,
+          deletedAt: record.deleted_at || null
+        })
+      );
+    }
+    if (record.record_type === "options" && record.record_id === "library") {
+      remoteOptions = record;
+    }
+  });
+
+  state.syncApplying = true;
+  try {
+    await Promise.all([
+      storePutMany(ITEM_STORE, items),
+      storePutMany(TEMPLATE_STORE, templates)
+    ]);
+    if (remoteOptions?.payload && typeof remoteOptions.payload === "object") {
+      state.categories = Array.isArray(remoteOptions.payload.categories)
+        ? remoteOptions.payload.categories.map(normalizeOption).filter(Boolean)
+        : [];
+      state.tags = Array.isArray(remoteOptions.payload.tags)
+        ? remoteOptions.payload.tags.map(normalizeOption).filter(Boolean)
+        : [];
+      saveOptionLibrary({ updatedAt: remoteOptions.updated_at, schedule: false });
+    }
+    await refreshData();
+  } finally {
+    state.syncApplying = false;
+  }
+}
+
+function syncRecordKey(record) {
+  return `${record.record_type}:${record.record_id}`;
+}
+
+function compareSyncTimestamps(left, right) {
+  return new Date(left).getTime() - new Date(right).getTime();
+}
+
+function isValidTimestamp(value) {
+  return typeof value === "string" && Number.isFinite(new Date(value).getTime());
+}
+
+function formatShortDateTime(value) {
+  const timestamp = new Date(value);
+  if (!Number.isFinite(timestamp.getTime())) return "未知";
+  return new Intl.DateTimeFormat("zh-CN", {
+    month: "numeric",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit"
+  }).format(timestamp);
 }
 
 function renderOptionManagement() {
@@ -1378,11 +2037,12 @@ async function handleOptionDelete(event) {
 }
 
 function exportAllData() {
+  const exportedAt = new Date();
   const backup = {
     app: "xiaoji",
     backupVersion: 1,
     dataSchemaVersion: DATA_SCHEMA_VERSION,
-    exportedAt: new Date().toISOString(),
+    exportedAt: exportedAt.toISOString(),
     items: state.items,
     templates: state.templates,
     categories: state.categories,
@@ -1397,6 +2057,9 @@ function exportAllData() {
   link.click();
   link.remove();
   URL.revokeObjectURL(url);
+  localStorage.setItem(LAST_BACKUP_KEY, String(exportedAt.getTime()));
+  localStorage.setItem(LAST_BACKUP_REMINDER_KEY, String(exportedAt.getTime()));
+  renderBackupStatus();
   showSnackbar("备份已导出，请妥善保存文件", false);
 }
 
@@ -1460,21 +2123,21 @@ function isValidBackup(backup) {
     return false;
   }
 
-  function migrateBackup(backup) {
-    return {
-      ...backup,
-      dataSchemaVersion: DATA_SCHEMA_VERSION,
-      items: backup.items.map(normalizeItemRecord),
-      templates: backup.templates.map(normalizeTemplateRecord)
-    };
-  }
-
   return (
     backup.items.every((item) => item && typeof item.id === "string" && typeof item.title === "string") &&
     backup.templates.every(
       (template) => template && typeof template.id === "string" && typeof template.title === "string"
     )
   );
+}
+
+function migrateBackup(backup) {
+  return {
+    ...backup,
+    dataSchemaVersion: DATA_SCHEMA_VERSION,
+    items: backup.items.map(normalizeItemRecord),
+    templates: backup.templates.map(normalizeTemplateRecord)
+  };
 }
 
 function showSnackbar(message, canUndo) {
