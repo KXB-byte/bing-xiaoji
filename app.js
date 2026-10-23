@@ -105,7 +105,19 @@ const COLOR_PRESETS = [
   "#b7a99a",
   "#94a3b8",
   "#64748b",
-  "#40372f"
+  "#40372f",
+  "#ff1744",
+  "#ff5252",
+  "#ff6d00",
+  "#ff9100",
+  "#ffd600",
+  "#c6ff00",
+  "#00e676",
+  "#00e5ff",
+  "#00b0ff",
+  "#536dfe",
+  "#7c4dff",
+  "#ff4081"
 ];
 const DEFAULT_CATEGORIES = [
   { name: "生活", color: "#f5bd4f" },
@@ -280,7 +292,7 @@ function bindEvents() {
   elements.nextPeriod.addEventListener("click", () => movePeriod(1));
   elements.todayButton.addEventListener("click", () => {
     state.selectedDate = startOfDay(new Date());
-    render();
+    setView("day");
   });
   elements.periodTitle.addEventListener("click", () => {
     elements.datePicker.value = toDateKey(state.selectedDate);

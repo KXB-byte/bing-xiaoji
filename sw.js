@@ -1,4 +1,4 @@
-const CACHE_NAME = "xiaoji-v31";
+const CACHE_NAME = "xiaoji-v33";
 const APP_SHELL = [
   "./",
   "./index.html",
