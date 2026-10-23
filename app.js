@@ -17,6 +17,56 @@ const TRASH_RETENTION_MS = 30 * DAY_MS;
 const OPTION_LIBRARY_VERSION = 2;
 const DATA_SCHEMA_VERSION = 5;
 const REMINDER_LEAD_MS = 5 * 60 * 1000;
+const FIXED_CALENDAR_LABELS = new Map([
+  ["1-1", "元旦"],
+  ["5-1", "劳动节"],
+  ["10-1", "国庆"]
+]);
+const LUNAR_CALENDAR_LABELS = new Map([
+  ["1-1", "春节"],
+  ["1-15", "元宵"],
+  ["2-2", "龙抬头"],
+  ["5-5", "端午"],
+  ["7-7", "七夕"],
+  ["8-15", "中秋"],
+  ["9-9", "重阳"],
+  ["12-8", "腊八"]
+]);
+const SOLAR_TERM_NAMES = [
+  "小寒",
+  "大寒",
+  "立春",
+  "雨水",
+  "惊蛰",
+  "春分",
+  "清明",
+  "谷雨",
+  "立夏",
+  "小满",
+  "芒种",
+  "夏至",
+  "小暑",
+  "大暑",
+  "立秋",
+  "处暑",
+  "白露",
+  "秋分",
+  "寒露",
+  "霜降",
+  "立冬",
+  "小雪",
+  "大雪",
+  "冬至"
+];
+const SOLAR_TERM_MINUTES = [
+  0, 21208, 42467, 63836, 85337, 107014, 128867, 150921, 173149, 195551, 218072, 240693, 263343, 285989,
+  308563, 331033, 353350, 375494, 397447, 419210, 440795, 462224, 483532, 504758
+];
+const CHINESE_CALENDAR_FORMATTER = new Intl.DateTimeFormat("zh-CN-u-ca-chinese", {
+  month: "numeric",
+  day: "numeric"
+});
+const HAS_CHINESE_CALENDAR = CHINESE_CALENDAR_FORMATTER.resolvedOptions().calendar === "chinese";
 const COLOR_PRESETS = [
   "#f5bd4f",
   "#f28c52",
@@ -69,7 +119,6 @@ async function init() {
   state.syncClient = new window.XiaojiSyncClient();
   loadOptionLibrary();
   renderColorPresets();
-  renderTimeOptions();
   bindEvents();
   await openDatabase();
   await ensureDataSchemaMetadata();
@@ -216,9 +265,8 @@ function bindEvents() {
   elements.addItem.addEventListener("click", () => openItemDialog());
   elements.itemForm.addEventListener("submit", saveItemFromForm);
   elements.itemForm.addEventListener("input", saveDraft);
-  elements.itemTime.addEventListener("change", validateTimeRange);
-  elements.itemTime.addEventListener("change", updateReminderFormState);
-  elements.itemDeadlineTime.addEventListener("change", validateTimeRange);
+  elements.itemTime.addEventListener("change", () => handleTimeChange(elements.itemTime, true));
+  elements.itemDeadlineTime.addEventListener("change", () => handleTimeChange(elements.itemDeadlineTime));
   elements.categoryColorPresets.addEventListener("click", selectPresetColor);
   elements.tagColorPresets.addEventListener("click", selectPresetColor);
   elements.newCategoryColor.addEventListener("input", syncPresetSelection);
@@ -451,9 +499,13 @@ function render() {
 }
 
 function renderPeriodTitle() {
+  const currentYear = new Date().getFullYear();
+  const selectedYear = state.selectedDate.getFullYear();
+  const includeYear = selectedYear !== currentYear;
+
   if (state.view === "day") {
     elements.periodTitle.textContent = formatDate(state.selectedDate, {
-      year: "numeric",
+      ...(includeYear ? { year: "numeric" } : {}),
       month: "long",
       day: "numeric",
       weekday: "short"
@@ -464,14 +516,15 @@ function renderPeriodTitle() {
   if (state.view === "week") {
     const start = startOfWeek(state.selectedDate);
     const end = addDays(start, 6);
-    const sameMonth = start.getMonth() === end.getMonth();
+    const sameMonth = start.getFullYear() === end.getFullYear() && start.getMonth() === end.getMonth();
+    const yearPrefix = start.getFullYear() !== currentYear ? `${start.getFullYear()}年` : "";
     elements.periodTitle.textContent = sameMonth
-      ? `${start.getFullYear()}年${start.getMonth() + 1}月 ${start.getDate()}–${end.getDate()}日`
-      : `${start.getMonth() + 1}月${start.getDate()}日 – ${end.getMonth() + 1}月${end.getDate()}日`;
+      ? `${yearPrefix}${start.getMonth() + 1}月${start.getDate()}–${end.getDate()}日`
+      : `${yearPrefix}${start.getMonth() + 1}月${start.getDate()}日–${end.getMonth() + 1}月${end.getDate()}日`;
     return;
   }
 
-  elements.periodTitle.textContent = formatDate(state.selectedDate, { year: "numeric", month: "long" });
+  elements.periodTitle.textContent = `${includeYear ? `${selectedYear}年` : ""}${state.selectedDate.getMonth() + 1}月`;
 }
 
 function renderPlanner() {
@@ -573,6 +626,46 @@ function renderWeekItem(item) {
     </div>`;
 }
 
+function getLunarDateParts(date) {
+  if (!HAS_CHINESE_CALENDAR) return null;
+  const parts = CHINESE_CALENDAR_FORMATTER.formatToParts(date);
+  const month = parts.find((part) => part.type === "month")?.value || "";
+  const day = parts.find((part) => part.type === "day")?.value || "";
+  if (!/^\d+$/.test(month) || !/^\d+$/.test(day)) return null;
+  return { month: Number(month), day: Number(day) };
+}
+
+function getLunarCalendarLabel(date) {
+  const lunarDate = getLunarDateParts(date);
+  if (!lunarDate) return "";
+  const label = LUNAR_CALENDAR_LABELS.get(`${lunarDate.month}-${lunarDate.day}`);
+  if (label) return label;
+
+  const nextLunarDate = getLunarDateParts(addDays(date, 1));
+  return nextLunarDate?.month === 1 && nextLunarDate.day === 1 ? "除夕" : "";
+}
+
+function getSolarTermLabel(date) {
+  const year = date.getFullYear();
+  if (year < 1900 || year > 2100) return "";
+  const baseTime = Date.UTC(1900, 0, 6, 2, 5);
+  for (let index = 0; index < SOLAR_TERM_NAMES.length; index += 1) {
+    const termDate = new Date(baseTime + 31556925974.7 * (year - 1900) + SOLAR_TERM_MINUTES[index] * 60_000);
+    if (termDate.getUTCMonth() === date.getMonth() && termDate.getUTCDate() === date.getDate()) {
+      return SOLAR_TERM_NAMES[index];
+    }
+  }
+  return "";
+}
+
+function getCalendarLabel(date) {
+  const fixedLabel = FIXED_CALENDAR_LABELS.get(`${date.getMonth() + 1}-${date.getDate()}`) || "";
+  const labels = [fixedLabel, getLunarCalendarLabel(date), getSolarTermLabel(date)].filter(
+    (label, index, allLabels) => label && allLabels.indexOf(label) === index
+  );
+  return labels.join(" · ");
+}
+
 function renderMonthView() {
   const firstOfMonth = new Date(state.selectedDate.getFullYear(), state.selectedDate.getMonth(), 1);
   const gridStart = startOfWeek(firstOfMonth);
@@ -587,6 +680,7 @@ function renderMonthView() {
           const dateKey = toDateKey(date);
           const items = getVisibleItemsForDate(dateKey);
           const outside = date.getMonth() !== state.selectedDate.getMonth();
+          const calendarLabel = getCalendarLabel(date);
           return `
             <button
               class="month-cell ${outside ? "outside" : ""} ${isToday(date) ? "today" : ""} ${
@@ -595,7 +689,16 @@ function renderMonthView() {
               type="button"
               data-select-date="${dateKey}"
             >
-              <span class="month-number">${date.getDate()}</span>
+              <span class="month-date-line">
+                <span class="month-number">${date.getDate()}</span>
+                ${
+                  calendarLabel
+                    ? `<span class="month-calendar-label" title="${escapeHtml(calendarLabel)}">${escapeHtml(
+                        calendarLabel
+                      )}</span>`
+                    : ""
+                }
+              </span>
               <span class="month-items">
                 ${items
                   .map(
@@ -954,27 +1057,33 @@ function addTag() {
   showSnackbar(existing ? "已选择这个标签" : "标签已添加并选中", false);
 }
 
-function renderTimeOptions() {
-  const options = ['<option value="">未设置</option>'];
-  for (let minutes = 0; minutes < 24 * 60; minutes += 5) {
-    const value = `${String(Math.floor(minutes / 60)).padStart(2, "0")}:${String(minutes % 60).padStart(2, "0")}`;
-    options.push(`<option value="${value}">${value}</option>`);
-  }
-  elements.itemTime.innerHTML = options.join("");
-  elements.itemDeadlineTime.innerHTML = options.join("");
+function normalizeTimeToFiveMinutes(value) {
+  const match = /^([01]\d|2[0-3]):([0-5]\d)$/.exec(value || "");
+  if (!match) return "";
+  const minutes = Number(match[1]) * 60 + Number(match[2]);
+  const rounded = Math.min(Math.round(minutes / 5) * 5, 24 * 60 - 5);
+  return `${String(Math.floor(rounded / 60)).padStart(2, "0")}:${String(rounded % 60).padStart(2, "0")}`;
 }
 
-function setTimeSelectValue(select, value) {
-  select.querySelector('option[data-legacy-time]')?.remove();
-  const safeValue = typeof value === "string" ? value : "";
-  if (safeValue && !Array.from(select.options).some((option) => option.value === safeValue)) {
-    const legacyOption = document.createElement("option");
-    legacyOption.value = safeValue;
-    legacyOption.textContent = `${safeValue}（原记录）`;
-    legacyOption.dataset.legacyTime = "true";
-    select.append(legacyOption);
-  }
-  select.value = safeValue;
+function getNearestFiveMinuteTime(date = new Date()) {
+  const minutes = date.getHours() * 60 + date.getMinutes() + date.getSeconds() / 60;
+  const rounded = Math.min(Math.round(minutes / 5) * 5, 24 * 60 - 5);
+  return `${String(Math.floor(rounded / 60)).padStart(2, "0")}:${String(rounded % 60).padStart(2, "0")}`;
+}
+
+function setTimeInputValue(input, value) {
+  const safeValue = typeof value === "string" && /^([01]\d|2[0-3]):([0-5]\d)$/.test(value) ? value : "";
+  input.value = safeValue;
+  const isLegacyTime = Boolean(safeValue && normalizeTimeToFiveMinutes(safeValue) !== safeValue);
+  input.step = isLegacyTime ? "any" : "300";
+}
+
+function handleTimeChange(input, updatesReminder = false) {
+  input.step = "300";
+  input.value = normalizeTimeToFiveMinutes(input.value);
+  validateTimeRange();
+  if (updatesReminder) updateReminderFormState();
+  saveDraft();
 }
 
 function validateTimeRange() {
@@ -1041,6 +1150,8 @@ function hexToRgba(color, alpha) {
 
 function openItemDialog(item = null, defaults = {}) {
   elements.itemForm.reset();
+  setTimeInputValue(elements.itemTime, "");
+  setTimeInputValue(elements.itemDeadlineTime, "");
   elements.draftHint.classList.add("hidden");
   elements.itemRecurrence.disabled = false;
   elements.itemWeekly.disabled = false;
@@ -1052,8 +1163,8 @@ function openItemDialog(item = null, defaults = {}) {
     elements.itemId.value = item.id;
     elements.itemTitle.value = item.title;
     elements.itemDate.value = item.date;
-    setTimeSelectValue(elements.itemTime, item.time);
-    setTimeSelectValue(elements.itemDeadlineTime, item.deadlineTime);
+    setTimeInputValue(elements.itemTime, item.time);
+    setTimeInputValue(elements.itemDeadlineTime, item.deadlineTime);
     elements.itemCategory.value = item.category || "";
     elements.itemNotes.value = item.notes || "";
     elements.itemRecurrence.value = item.recurrence || "none";
@@ -1064,9 +1175,11 @@ function openItemDialog(item = null, defaults = {}) {
     elements.itemWeekly.disabled = Boolean(item.seriesId);
     elements.deleteItem.classList.remove("hidden");
   } else {
+    const now = new Date();
     elements.itemDialogTitle.textContent = "新建事项";
     elements.itemId.value = "";
-    elements.itemDate.value = defaults.date || toDateKey(state.selectedDate);
+    elements.itemDate.value = defaults.date || toDateKey(now);
+    if (!defaults.weeklyOnly) setTimeInputValue(elements.itemTime, getNearestFiveMinuteTime(now));
     elements.itemWeekly.checked = Boolean(defaults.weeklyOnly);
     elements.itemReminder.checked = true;
     elements.deleteItem.classList.add("hidden");
@@ -1085,13 +1198,14 @@ function openItemDialog(item = null, defaults = {}) {
 
 function readItemForm() {
   const time = elements.itemTime.value;
+  const deadlineTime = elements.itemDeadlineTime.value;
   const date = elements.itemDate.value;
   const reminderEnabled = Boolean(time && elements.itemReminder.checked);
   return {
     title: elements.itemTitle.value.trim(),
     date,
     time,
-    deadlineTime: elements.itemDeadlineTime.value,
+    deadlineTime,
     category: elements.itemCategory.value,
     tags: Array.from(elements.tagOptions.querySelectorAll('input[type="checkbox"]:checked'), (input) => input.value),
     notes: elements.itemNotes.value.trim(),
@@ -1206,8 +1320,8 @@ function restoreDraft() {
     const draft = JSON.parse(rawDraft);
     elements.itemTitle.value = draft.title || "";
     elements.itemDate.value = draft.date || toDateKey(state.selectedDate);
-    setTimeSelectValue(elements.itemTime, draft.time);
-    setTimeSelectValue(elements.itemDeadlineTime, draft.deadlineTime);
+    setTimeInputValue(elements.itemTime, draft.time);
+    setTimeInputValue(elements.itemDeadlineTime, draft.deadlineTime);
     renderCategoryOptions(draft.category || "");
     renderTagOptions(draft.tags || []);
     elements.itemCategory.value = draft.category || "";
@@ -1708,8 +1822,7 @@ function setSyncBusy(busy) {
     elements.clearSyncConfig,
     elements.syncLogin,
     elements.syncNow,
-    elements.syncLogout,
-    elements.toggleNotifications
+    elements.syncLogout
   ].forEach((button) => {
     button.disabled = busy;
   });
@@ -1743,6 +1856,7 @@ async function togglePushNotifications() {
     return;
   }
   setSyncBusy(true);
+  elements.toggleNotifications.disabled = true;
   try {
     const registration = await navigator.serviceWorker.ready;
     const existing = await registration.pushManager.getSubscription();
@@ -1772,7 +1886,10 @@ async function togglePushNotifications() {
     }
     setSyncMessage("已开启手机通知", "success");
   } catch (error) {
-    setSyncMessage(`通知设置失败：${error.message}`, "error");
+    const message = /push service error/i.test(error.message)
+      ? "手机浏览器连接推送服务失败。请切换网络后重试；Android Chrome 还需要可用的 Google Play 服务，也可以尝试使用 Firefox 安装冰小记。"
+      : error.message;
+    setSyncMessage(`通知设置失败：${message}`, "error");
   } finally {
     setSyncBusy(false);
     await refreshNotificationStatus();
