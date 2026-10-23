@@ -227,6 +227,7 @@ select {
 
 .planner {
   outline: none;
+  touch-action: pan-y;
 }
 
 .day-layout {
@@ -759,6 +760,10 @@ select {
   margin: -6px 0 15px;
 }
 
+.management-section .option-creator {
+  margin: 10px 0 0;
+}
+
 .option-creator summary {
   width: fit-content;
   color: var(--primary);
@@ -1105,6 +1110,25 @@ select {
   border: 1px solid var(--line);
   border-radius: 14px;
   background: #fdf8f1;
+}
+
+.managed-color-input {
+  width: 30px;
+  height: 30px;
+  padding: 2px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--surface-strong);
+  cursor: pointer;
+}
+
+.managed-color-input::-webkit-color-swatch-wrapper {
+  padding: 0;
+}
+
+.managed-color-input::-webkit-color-swatch {
+  border: 0;
+  border-radius: 6px;
 }
 
 .managed-option strong {

@@ -17,6 +17,8 @@ const TRASH_RETENTION_MS = 30 * DAY_MS;
 const OPTION_LIBRARY_VERSION = 2;
 const DATA_SCHEMA_VERSION = 5;
 const REMINDER_LEAD_MS = 5 * 60 * 1000;
+const PLANNER_SWIPE_MIN_DISTANCE = 48;
+const PLANNER_SWIPE_DIRECTION_RATIO = 1.2;
 const FIXED_CALENDAR_LABELS = new Map([
   ["1-1", "元旦"],
   ["5-1", "劳动节"],
@@ -97,6 +99,8 @@ const state = {
   templateId: null,
   deleteItemId: null,
   optionDeletePending: false,
+  plannerSwipeStart: null,
+  ignorePlannerClickUntil: 0,
   completionTimers: new Map(),
   undoIds: [],
   undoTimer: null,
@@ -261,6 +265,9 @@ function bindEvents() {
     state.search = elements.searchInput.value.trim().toLocaleLowerCase("zh-CN");
     renderPlanner();
   });
+  elements.planner.addEventListener("pointerdown", handlePlannerPointerDown);
+  window.addEventListener("pointerup", handlePlannerPointerUp);
+  window.addEventListener("pointercancel", clearPlannerSwipe);
 
   elements.addItem.addEventListener("click", () => openItemDialog());
   elements.itemForm.addEventListener("submit", saveItemFromForm);
@@ -308,6 +315,8 @@ function bindEvents() {
   elements.toggleNotifications.addEventListener("click", togglePushNotifications);
   elements.categoryManagementList.addEventListener("click", handleOptionDelete);
   elements.tagManagementList.addEventListener("click", handleOptionDelete);
+  elements.categoryManagementList.addEventListener("change", handleOptionColorChange);
+  elements.tagManagementList.addEventListener("change", handleOptionColorChange);
   elements.exportData.addEventListener("click", exportAllData);
   elements.chooseImport.addEventListener("click", () => elements.importFile.click());
   elements.importFile.addEventListener("change", importBackup);
@@ -488,9 +497,46 @@ function movePeriod(direction) {
   const date = new Date(state.selectedDate);
   if (state.view === "day") date.setDate(date.getDate() + direction);
   if (state.view === "week") date.setDate(date.getDate() + direction * 7);
-  if (state.view === "month") date.setMonth(date.getMonth() + direction);
+  if (state.view === "month") {
+    const day = date.getDate();
+    date.setDate(1);
+    date.setMonth(date.getMonth() + direction);
+    const lastDay = new Date(date.getFullYear(), date.getMonth() + 1, 0).getDate();
+    date.setDate(Math.min(day, lastDay));
+  }
   state.selectedDate = startOfDay(date);
   render();
+}
+
+function handlePlannerPointerDown(event) {
+  if (event.pointerType === "mouse" || !event.isPrimary) return;
+  state.plannerSwipeStart = {
+    pointerId: event.pointerId,
+    x: event.clientX,
+    y: event.clientY
+  };
+}
+
+function handlePlannerPointerUp(event) {
+  const start = state.plannerSwipeStart;
+  clearPlannerSwipe();
+  if (!start || start.pointerId !== event.pointerId) return;
+
+  const horizontalDistance = event.clientX - start.x;
+  const verticalDistance = event.clientY - start.y;
+  if (
+    Math.abs(horizontalDistance) < PLANNER_SWIPE_MIN_DISTANCE ||
+    Math.abs(horizontalDistance) <= Math.abs(verticalDistance) * PLANNER_SWIPE_DIRECTION_RATIO
+  ) {
+    return;
+  }
+
+  state.ignorePlannerClickUntil = Date.now() + 350;
+  movePeriod(horizontalDistance < 0 ? 1 : -1);
+}
+
+function clearPlannerSwipe() {
+  state.plannerSwipeStart = null;
 }
 
 function render() {
@@ -798,6 +844,7 @@ function compareItems(a, b) {
 }
 
 function handlePlannerClick(event) {
+  if (Date.now() < state.ignorePlannerClickUntil) return;
   const addWeeklyButton = event.target.closest("[data-add-weekly]");
   if (addWeeklyButton) {
     openItemDialog(null, { weeklyOnly: true, date: toDateKey(startOfWeek(state.selectedDate)) });
@@ -1010,7 +1057,7 @@ function renderTagOptions(selectedNames = []) {
             </label>`
         )
         .join("")
-    : '<span class="tag-empty">还没有标签，可以在下方添加。</span>';
+    : '<span class="tag-empty">还没有标签，可在“管理”中添加。</span>';
 }
 
 function addCategory() {
@@ -1028,9 +1075,9 @@ function addCategory() {
 
   state.categories.push({ name, color: sanitizeColor(elements.newCategoryColor.value) });
   saveOptionLibrary();
-  renderCategoryOptions(name);
+  renderCategoryOptions();
+  renderOptionManagement();
   elements.newCategoryName.value = "";
-  saveDraft();
   showSnackbar("分类已添加", false);
 }
 
@@ -1041,20 +1088,16 @@ function addTag() {
     return;
   }
 
-  const selectedNames = Array.from(
-    elements.tagOptions.querySelectorAll('input[type="checkbox"]:checked'),
-    (input) => input.value
-  );
   const existing = state.tags.find((tag) => tag.name === name);
   if (!existing) {
     state.tags.push({ name, color: sanitizeColor(elements.newTagColor.value) });
     saveOptionLibrary();
   }
 
-  renderTagOptions([...new Set([...selectedNames, name])]);
+  renderTagOptions();
+  renderOptionManagement();
   elements.newTagName.value = "";
-  saveDraft();
-  showSnackbar(existing ? "已选择这个标签" : "标签已添加并选中", false);
+  showSnackbar(existing ? "这个标签已经存在" : "标签已添加", false);
 }
 
 function normalizeTimeToFiveMinutes(value) {
@@ -1178,7 +1221,7 @@ function openItemDialog(item = null, defaults = {}) {
     const now = new Date();
     elements.itemDialogTitle.textContent = "新建事项";
     elements.itemId.value = "";
-    elements.itemDate.value = defaults.date || toDateKey(now);
+    elements.itemDate.value = defaults.date || toDateKey(state.selectedDate);
     if (!defaults.weeklyOnly) setTimeInputValue(elements.itemTime, getNearestFiveMinuteTime(now));
     elements.itemWeekly.checked = Boolean(defaults.weeklyOnly);
     elements.itemReminder.checked = true;
@@ -2091,7 +2134,14 @@ function renderManagedOption(type, option) {
   const encodedName = encodeURIComponent(option.name);
   return `
     <div class="managed-option">
-      <span class="managed-color" style="background:${option.color}"></span>
+      <input
+        class="managed-color-input"
+        type="color"
+        value="${option.color}"
+        data-update-option-color="${type}"
+        data-option-name="${encodedName}"
+        aria-label="修改${escapeHtml(option.name)}的颜色"
+      />
       <strong>${escapeHtml(option.name)}</strong>
       <button
         class="mini-button danger"
@@ -2101,6 +2151,30 @@ function renderManagedOption(type, option) {
         aria-label="删除${escapeHtml(option.name)}"
       >删除</button>
     </div>`;
+}
+
+function handleOptionColorChange(event) {
+  const input = event.target.closest("[data-update-option-color]");
+  if (!input) return;
+  const type = input.dataset.updateOptionColor;
+  const name = decodeURIComponent(input.dataset.optionName);
+  const options = type === "category" ? state.categories : state.tags;
+  const option = options.find((candidate) => candidate.name === name);
+  if (!option) {
+    showSnackbar("没有找到要修改的分类或标签", false);
+    renderOptionManagement();
+    return;
+  }
+
+  const color = sanitizeColor(input.value);
+  if (option.color === color) return;
+  option.color = color;
+  saveOptionLibrary();
+  renderCategoryOptions();
+  renderTagOptions();
+  renderPlanner();
+  renderOptionManagement();
+  showSnackbar(`${type === "category" ? "分类" : "标签"}颜色已更新`, false);
 }
 
 async function handleOptionDelete(event) {

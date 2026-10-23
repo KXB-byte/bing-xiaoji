@@ -93,34 +93,10 @@
           <span>分类</span>
           <select id="item-category" name="category"></select>
         </label>
-        <details class="option-creator">
-          <summary>＋ 添加自定义分类</summary>
-          <div class="option-creator-row">
-            <input id="new-category-name" type="text" maxlength="20" placeholder="分类名称" aria-label="新分类名称" />
-            <div id="category-color-presets" class="color-presets" aria-label="分类预设颜色"></div>
-            <label class="color-picker">
-              <span>自定义</span>
-              <input id="new-category-color" type="color" value="#d58b63" aria-label="新分类颜色" />
-            </label>
-            <button id="add-category" class="button secondary" type="button">添加</button>
-          </div>
-        </details>
 
         <fieldset class="tag-field">
           <legend>标签（可多选）</legend>
           <div id="tag-options" class="tag-options"></div>
-          <details class="option-creator">
-            <summary>＋ 添加新标签</summary>
-            <div class="option-creator-row">
-              <input id="new-tag-name" type="text" maxlength="20" placeholder="标签名称" aria-label="新标签名称" />
-              <div id="tag-color-presets" class="color-presets" aria-label="标签预设颜色"></div>
-              <label class="color-picker">
-                <span>自定义</span>
-                <input id="new-tag-color" type="color" value="#e9b872" aria-label="新标签颜色" />
-              </label>
-              <button id="add-tag" class="button secondary" type="button">添加</button>
-            </div>
-          </details>
         </fieldset>
 
         <label class="field full">
@@ -285,9 +261,21 @@
         <div class="management-heading">
           <div>
             <h3>分类</h3>
-            <p>删除分类后，相关事项会变为未分类。</p>
+            <p>可以新增或修改颜色；删除后，相关事项会变为未分类。</p>
           </div>
         </div>
+        <details class="option-creator">
+          <summary>＋ 添加分类</summary>
+          <div class="option-creator-row">
+            <input id="new-category-name" type="text" maxlength="20" placeholder="分类名称" aria-label="新分类名称" />
+            <div id="category-color-presets" class="color-presets" aria-label="分类预设颜色"></div>
+            <label class="color-picker">
+              <span>自定义</span>
+              <input id="new-category-color" type="color" value="#d58b63" aria-label="新分类颜色" />
+            </label>
+            <button id="add-category" class="button secondary" type="button">添加</button>
+          </div>
+        </details>
         <div id="category-management-list" class="management-list"></div>
       </section>
 
@@ -295,9 +283,21 @@
         <div class="management-heading">
           <div>
             <h3>标签</h3>
-            <p>删除标签不会删除使用它的事项。</p>
+            <p>可以新增或修改颜色；删除标签不会删除事项。</p>
           </div>
         </div>
+        <details class="option-creator">
+          <summary>＋ 添加标签</summary>
+          <div class="option-creator-row">
+            <input id="new-tag-name" type="text" maxlength="20" placeholder="标签名称" aria-label="新标签名称" />
+            <div id="tag-color-presets" class="color-presets" aria-label="标签预设颜色"></div>
+            <label class="color-picker">
+              <span>自定义</span>
+              <input id="new-tag-color" type="color" value="#e9b872" aria-label="新标签颜色" />
+            </label>
+            <button id="add-tag" class="button secondary" type="button">添加</button>
+          </div>
+        </details>
         <div id="tag-management-list" class="management-list"></div>
       </section>
 
