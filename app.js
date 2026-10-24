@@ -1890,12 +1890,12 @@ function saveSyncConfig() {
 
 async function clearSyncConfig() {
   window.clearTimeout(state.syncTimer);
+  let pushWarning = "";
   if (state.syncClient.isSignedIn()) {
     try {
       await disablePushNotifications();
     } catch (error) {
-      setSyncMessage(`清除配置前无法关闭推送：${error.message}`, "error");
-      return;
+      pushWarning = `；但无法注销旧推送：${error.message}`;
     }
   }
   state.syncClient.clearConfig();
@@ -1904,7 +1904,10 @@ async function clearSyncConfig() {
   elements.syncVapidPublicKey.value = "";
   elements.syncEmail.value = "";
   elements.syncPassword.value = "";
-  setSyncMessage("已清除这台设备上的 Supabase 配置和登录会话", "success");
+  setSyncMessage(
+    `已清除这台设备上的 Supabase 配置和登录会话${pushWarning}`,
+    pushWarning ? "error" : "success"
+  );
 }
 
 function readSyncCredentials() {
@@ -1939,12 +1942,25 @@ async function signInToSync() {
 
 async function signOutOfSync() {
   setSyncBusy(true);
+  let pushWarning = "";
   try {
-    await disablePushNotifications();
+    try {
+      await disablePushNotifications();
+    } catch (error) {
+      pushWarning = `；但无法注销旧推送：${error.message}`;
+    }
     await state.syncClient.signOut();
-    setSyncMessage("已退出同步账号，本机数据仍然保留", "success");
+    setSyncMessage(
+      `已退出同步账号，本机数据仍然保留${pushWarning}`,
+      pushWarning ? "error" : "success"
+    );
   } catch (error) {
-    setSyncMessage(error.message, "error");
+    setSyncMessage(
+      state.syncClient.isSignedIn()
+        ? `退出失败：${error.message}`
+        : `已清除本机登录会话，本机数据仍然保留；云端退出确认失败：${error.message}`,
+      "error"
+    );
   } finally {
     setSyncBusy(false);
   }
