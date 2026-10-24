@@ -1417,13 +1417,14 @@ async function createItemsFromDefinition(definition, timestamp = new Date().toIS
 function generateRecurrenceDates(startDateKey, recurrence) {
   const startDate = fromDateKey(startDateKey);
   const dates = [];
-  const limits = { daily: 365, weekly: 104, monthly: 24 };
+  const limits = { daily: 365, weekly: 104, biweekly: 52, monthly: 24 };
   const count = limits[recurrence] || 1;
 
   for (let index = 0; index < count; index += 1) {
     const date = new Date(startDate);
     if (recurrence === "daily") date.setDate(startDate.getDate() + index);
     if (recurrence === "weekly") date.setDate(startDate.getDate() + index * 7);
+    if (recurrence === "biweekly") date.setDate(startDate.getDate() + index * 14);
     if (recurrence === "monthly") {
       date.setDate(1);
       date.setMonth(startDate.getMonth() + index);
@@ -1866,7 +1867,7 @@ function renderSyncDialog() {
   elements.syncAccountSection.classList.toggle("hidden", !configured || Boolean(session));
   elements.syncSessionSection.classList.toggle("hidden", !session);
   elements.syncAccountEmail.textContent = session
-    ? `当前登录：${session.user.email || session.user.id}`
+    ? `当前登录：${session.user.email || "同步账号"} · 账号标识 ${session.user.id.slice(-8)}`
     : "";
   elements.syncDialogStatus.textContent = state.syncMessage;
   elements.syncDialogStatus.className = `sync-dialog-status ${state.syncMessageType}`;
@@ -2085,10 +2086,24 @@ async function syncNow({ silent = false } = {}) {
 
     await applyRemoteSyncRecords(recordsToApply);
     await state.syncClient.upsertRecords(recordsToPush);
+    const verifiedRemoteRecords = await state.syncClient.getRecords();
+    const verifiedRemoteMap = new Map(
+      verifiedRemoteRecords.map((record) => [syncRecordKey(record), record])
+    );
+    const unconfirmedRecords = recordsToPush.filter((record) => {
+      const verifiedRecord = verifiedRemoteMap.get(syncRecordKey(record));
+      return (
+        !verifiedRecord ||
+        compareSyncTimestamps(verifiedRecord.updated_at, record.updated_at) < 0
+      );
+    });
+    if (unconfirmedRecords.length) {
+      throw new Error(`云端未确认 ${unconfirmedRecords.length} 条上传记录`);
+    }
     const syncedAt = new Date().toISOString();
     localStorage.setItem(LAST_SYNC_KEY, syncedAt);
     setSyncMessage(
-      `同步完成：上传 ${recordsToPush.length} 条，下载 ${recordsToApply.length} 条`,
+      `同步完成：上传 ${recordsToPush.length} 条，下载 ${recordsToApply.length} 条，云端共 ${verifiedRemoteRecords.length} 条`,
       "success"
     );
   } catch (error) {
@@ -2483,7 +2498,7 @@ function findItem(id) {
 }
 
 function recurrenceLabel(recurrence) {
-  return { daily: "每天", weekly: "每周", monthly: "每月" }[recurrence] || "";
+  return { daily: "每天", weekly: "每周", biweekly: "每两周", monthly: "每月" }[recurrence] || "";
 }
 
 function daysUntilRemoval(deletedAt) {
