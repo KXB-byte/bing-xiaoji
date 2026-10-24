@@ -192,6 +192,7 @@
       try {
         response = await fetch(`${config.url}${path}`, {
           ...options,
+          cache: "no-store",
           headers: {
             apikey: config.publishableKey,
             "Content-Type": "application/json",

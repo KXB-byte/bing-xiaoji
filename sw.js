@@ -1,4 +1,4 @@
-const CACHE_NAME = "xiaoji-v36";
+const CACHE_NAME = "xiaoji-v37";
 const APP_SHELL = [
   "./",
   "./index.html",
@@ -33,6 +33,7 @@ self.addEventListener("activate", (event) => {
 
 self.addEventListener("fetch", (event) => {
   if (event.request.method !== "GET") return;
+  if (new URL(event.request.url).origin !== self.location.origin) return;
 
   event.respondWith(
     caches.match(event.request).then((cached) => {
